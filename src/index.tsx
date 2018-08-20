@@ -1,7 +1,7 @@
 import * as React from 'react'
 import * as ReactDOM from 'react-dom'
 import { Provider, connect } from 'react-redux'
-import { onlyUpdateForKeys, pure, shallowEqual, withState } from 'recompose'
+import { onlyUpdateForKeys } from 'recompose'
 import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators } from 'redux'
 import { List, Record, Set, OrderedSet } from 'immutable'
 import * as moment from 'moment'
@@ -11,6 +11,13 @@ import { ActionType, getType } from 'typesafe-actions'
 import './site.sass'
 import * as actions from './actions'
 import * as caltrain from './caltrain'
+
+
+(function() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('service-worker.js')
+    }
+})()
 
 
 function momentsAndOrEqual<T>(a: T, b: T): boolean {
@@ -62,9 +69,9 @@ let DateElement = onlyUpdateForKeys(
     case 'tomorrow': active = 'tomorrow'; break
     default:
         active = 'moment'
-        momentBox = <input className="input" type="date" value={props.date.format('YYYY-MM-DD')} onChange={ev => props.onSetDate({date: moment(ev.target.valueAsDate)})} />
+        momentBox = <input className="input" type="date" value={props.date.format('YYYY-MM-DD')} onChange={ev => props.onSetDate({date: moment(ev.target.value)})} />
     }
-    return <div className="flex gap-no read_l">
+    return <div className="flex gap-no read_l pa-v_s">
         <a className={"box " + (active == 'today'? 'active' : '')} onClick={() => props.onSetDate({date: 'today'})}>Today</a>
         <a className={"box " + (active == 'tomorrow'? 'active' : '')} onClick={() => props.onSetDate({date: 'tomorrow'})}>Tomorrow</a>
         <a className={"box " + (active == 'moment'? 'active' : '')} onClick={() => props.onSetDate({date: moment()})}>Date…</a>
@@ -112,7 +119,7 @@ let TripElement = onlyUpdateForKeys(
                     cell = ''
                 }
             } else if (props.selected.has(s.name)) {
-                cell = ts == 'skipped'? '–' : ts.arrival
+                cell = ts == 'skipped'? '–' : ts.arrival.slice(0, 5)
             } else {
                 cell = '⋯'
             }
@@ -128,6 +135,9 @@ let TripsElement = onlyUpdateForKeys(
     selected: Set<string>
     trips: List<caltrain.Trip>
 }) => {
+    if (props.trips.isEmpty()) {
+        return <></>
+    }
     let aTrip = props.trips.first()
     let service = new caltrain.ServiceStopKey(aTrip)
     let allStops = caltrain.serviceStops.get(service)
@@ -181,8 +191,8 @@ let ServicesElement = onlyUpdateForKeys(
     let date: moment.Moment
     switch (props.date) {
     case 'today': date = moment(); break
-    case 'tomorrow': date = moment().add(1, 'day'); break
-    default: date = props.date
+    case 'tomorrow': date = moment().add(1, 'day').startOf('day'); break
+    default: date = props.date.startOf('day')
     }
     let services = caltrain.servicesFor(date)
     let allServices = Set.intersect<caltrain.ServiceStopKey>(
@@ -195,10 +205,17 @@ let ServicesElement = onlyUpdateForKeys(
         .groupBy(s => s.direction)
         .map(collected => collected
             .valueSeq()
-            .sortBy(t => caltrain.tripStops.get(t.id).first().departure)
+            .map(t => [
+                t,
+                caltrain.tripStops.get(t.id).filter(ts => props.stops.has(ts.stop.name))
+            ] as [caltrain.Trip, List<caltrain.TripStop>])
+            .filter(([_t, tsl]) => tsl.some(ts => ts.departure > date.format('HH:MM:SS')))
+            .sortBy(([_t, tsl]) => tsl.first().departure)
+            .map(([t, _tsl]) => t)
             .toList())
-        .toMap()
-    return <>{trips.entrySeq().map(([direction, trips]) => <div key={direction} className="span-12">
+        .entrySeq()
+        .sortBy(([k, _v]) => k)
+    return <>{trips.map(([direction, trips], e) => <div key={e} className="span-12 pa-v_s">
         <TripsElement selected={props.stops} {...{direction, trips}} />
     </div>)}</>
 })

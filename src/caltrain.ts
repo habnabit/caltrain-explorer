@@ -1,4 +1,4 @@
-import { List, Map, OrderedMap, Record, Seq, Set, OrderedSet } from 'immutable'
+import { List, Map, Record, Seq, Set } from 'immutable'
 import { iso, Newtype } from 'newtype-ts'
 import * as moment from 'moment'
 const toposort: <T>(edges: [T, T][]) => T[] = require('toposort')
@@ -75,13 +75,6 @@ type CaltrainData = Readonly<{
         route_type: string,
         route_url: string
     }[],
-    shapes: {
-        shape_dist_traveled: string,
-        shape_id: string,
-        shape_pt_lat: string,
-        shape_pt_lon: string,
-        shape_pt_sequence: string
-    }[],
     stop_attributes: {
         accessibility_id: string,
         cardinal_direction: string,
@@ -129,8 +122,21 @@ type CaltrainData = Readonly<{
     }[],
 }>
 
-export const caltrain: CaltrainData = require('./ct-gtfs.json')
-export default caltrain
+interface RawData {
+    [key: string]: string[][]
+}
+
+const rawData: RawData = require('./ct-gtfs.json')
+export const caltrain = Seq(rawData)
+    .map(vl => {
+        let vseq = Seq(vl)
+        let keys = Seq(vseq.first())
+        new Object()
+        return vseq.slice(1)
+            .map(cells => Seq.Keyed(keys.zip(Seq(cells))).toObject())
+            .toArray()
+    })
+    .toObject() as CaltrainData
 
 export interface ZoneId extends Newtype<{ readonly ZoneId: unique symbol }, string> {}
 export const isoZoneId = iso<ZoneId>()
@@ -171,7 +177,7 @@ export const stops: Map<StopId, Stop> = Seq(caltrain.stops)
             id, zone,
             code: stop.stop_code,
             desc: stop.stop_desc,
-            name: stop.stop_name,
+            name: stop.stop_name.replace(' Caltrain', ''),
             url: stop.stop_url,
         })] as [StopId, Stop]
     })
