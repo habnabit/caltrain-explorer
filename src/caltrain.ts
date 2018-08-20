@@ -1,5 +1,6 @@
 import { List, Map, OrderedMap, Record, Seq, Set, OrderedSet } from 'immutable'
 import { iso, Newtype } from 'newtype-ts'
+import * as moment from 'moment'
 const toposort: <T>(edges: [T, T][]) => T[] = require('toposort')
 
 
@@ -140,7 +141,7 @@ export class FareZone extends Record({
 }) {
 }
 
-export const fareZones: Map<ZoneId, FareZone> = List(caltrain.farezone_attributes)
+export const fareZones: Map<ZoneId, FareZone> = Seq(caltrain.farezone_attributes)
     .toKeyedSeq()
     .mapEntries(([_e, {zone_id, zone_name}]) => {
         let id = isoZoneId.wrap(zone_id)
@@ -161,7 +162,7 @@ export class Stop extends Record({
 }) {
 }
 
-export const stops: Map<StopId, Stop> = List(caltrain.stops)
+export const stops: Map<StopId, Stop> = Seq(caltrain.stops)
     .toKeyedSeq()
     .mapEntries(([_e, stop]) => {
         let id = isoStopId.wrap(stop.stop_id)
@@ -188,7 +189,7 @@ export class Route extends Record({
 }) {
 }
 
-export const routes: Map<RouteId, Route> = List(caltrain.routes)
+export const routes: Map<RouteId, Route> = Seq(caltrain.routes)
     .toKeyedSeq()
     .mapEntries(([_e, route]) => {
         let id = isoRouteId.wrap(route.route_id)
@@ -205,13 +206,13 @@ export const routes: Map<RouteId, Route> = List(caltrain.routes)
 export interface ServiceId extends Newtype<{ readonly ServiceId: unique symbol }, string> {}
 export const isoServiceId = iso<ServiceId>()
 
-type Direction = 'North' | 'South'
+export type Direction = 'North' | 'South'
 export class DirectionKey extends Record({
     routeId: undefined as RouteId,
     directionId: '',
 }) {}
 
-const directions: Map<DirectionKey, Direction> = List(caltrain.directions)
+const directions: Map<DirectionKey, Direction> = Seq(caltrain.directions)
     .toKeyedSeq()
     .mapEntries(([_e, d]) =>
         [new DirectionKey({
@@ -223,6 +224,9 @@ const directions: Map<DirectionKey, Direction> = List(caltrain.directions)
 export interface TripId extends Newtype<{ readonly TripId: unique symbol }, string> {}
 export const isoTripId = iso<TripId>()
 
+export type AlignedStop = TripStop | 'skipped' | 'never'
+export type AlignedStops = List<[Stop, AlignedStop]>
+
 export class Trip extends Record({
     id: undefined as TripId,
     route: undefined as Route,
@@ -231,9 +235,36 @@ export class Trip extends Record({
     headsign: '',
     shortName: '',
 }) {
+    stopsAlignedTo(stops: List<Stop>): AlignedStops {
+        let byIdEntries = tripStops.get(this.id)
+            .valueSeq()
+            .map(ts => [ts.stop.id, ts] as [StopId, TripStop])
+            .toList()
+        let byId = Map(byIdEntries)
+        let firstStop = byIdEntries.first()[0]
+        let lastStop = byIdEntries.last()[0]
+        let seenFirst = false, seenLast = false
+        return List<[Stop, AlignedStop]>().withMutations(ret => {
+            stops.forEach(s => {
+                let stop = byId.get(s.id)
+                if (!seenFirst && stop && s.id == firstStop) {
+                    seenFirst = true
+                } else if (!seenLast && stop && s.id == lastStop) {
+                    seenLast = true
+                }
+                if (stop) {
+                    ret.push([s, stop])
+                } else if (!seenFirst || seenLast) {
+                    ret.push([s, 'never'])
+                } else {
+                    ret.push([s, 'skipped'])
+                }
+            })
+        })
+    }
 }
 
-export const trips: Map<TripId, Trip> = List(caltrain.trips)
+export const trips: Map<TripId, Trip> = Seq(caltrain.trips)
     .toKeyedSeq()
     .mapEntries(([_e, trip]) => {
         let id = isoTripId.wrap(trip.trip_id)
@@ -262,7 +293,7 @@ export class TripStop extends Record({
 }) {
 }
 
-export const tripStops: Map<TripId, List<TripStop>> = List(caltrain.stop_times)
+export const tripStops: Map<TripId, List<TripStop>> = Seq(caltrain.stop_times)
     .map(s => {
         return new TripStop({
             trip: trips.get(isoTripId.wrap(s.trip_id)),
@@ -304,9 +335,18 @@ export const serviceStops: Map<ServiceStopKey, List<Stop>> = tripStops
             .flatMap(([_key, stops]) => stops)
             .filter(([s1, s2]) => isoStopId.unwrap(s1).length == 5 && isoStopId.unwrap(s2).length == 5)
             .toArray()
-        let sorted = List(toposort(allDeps))
-        return sorted.map(stopId => stops.get(stopId))
+        let sorted = Seq(toposort(allDeps))
+        return sorted
+            .reverse()
+            .map(stopId => stops.get(stopId))
+            .toList()
     })
+    .toMap()
+
+export const tripsByService: Map<ServiceStopKey, List<Trip>> = trips
+    .valueSeq()
+    .groupBy(t => new ServiceStopKey(t))
+    .map(collected => collected.valueSeq().toList())
     .toMap()
 
 export const serviceStopKeysByStopName: Map<string, Set<ServiceStopKey>> = serviceStops
@@ -316,4 +356,24 @@ export const serviceStopKeysByStopName: Map<string, Set<ServiceStopKey>> = servi
     .map(collected => collected.valueSeq().map(([_name, key]) => key).toSet())
     .toMap()
 
-console.log(serviceStopKeysByStopName.toJS())
+const calendarKey: ('monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday')[] = [
+    'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+
+export function servicesFor(when: moment.Moment = moment()): Set<ServiceId> {
+    let whenString = when.format('YYYYMMDD')
+    let exception = Seq(caltrain.calendar_dates)
+        .find(d => d.date == whenString)
+    if (exception) {
+        return Set([isoServiceId.wrap(exception.service_id)])
+    }
+    return Seq(caltrain.calendar)
+        .filter(d => {
+            return (
+                whenString >= d.start_date
+                && whenString < d.end_date
+                && d[calendarKey[when.day()]] == '1'
+            )
+        })
+        .map(d => isoServiceId.wrap(d.service_id))
+        .toSet()
+}
