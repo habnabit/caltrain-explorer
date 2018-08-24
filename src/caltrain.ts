@@ -1,6 +1,7 @@
 import { List, Map, Record, Seq, Set } from 'immutable'
 import { iso, Newtype } from 'newtype-ts'
 import * as moment from 'moment'
+import * as transit from 'transit-immutable-js'
 const toposort: <T>(edges: [T, T][]) => T[] = require('toposort')
 
 
@@ -295,7 +296,6 @@ export class TripStop extends Record({
     arrival: '',
     departure: '',
     sequence: NaN,
-    timepoint: '',
 }) {
 }
 
@@ -307,7 +307,6 @@ export const tripStops: Map<TripId, List<TripStop>> = Seq(caltrain.stop_times)
             arrival: s.arrival_time,
             departure: s.departure_time,
             sequence: parseInt(s.stop_sequence),
-            timepoint: s.timepoint,
         })
     })
     .groupBy(s => s.trip.id)
@@ -382,4 +381,53 @@ export function servicesFor(when: moment.Moment = moment()): Set<ServiceId> {
         })
         .map(d => isoServiceId.wrap(d.service_id))
         .toSet()
+}
+
+const recordTransit = transit.withExtraHandlers([
+    {
+        tag: '¢FZ',
+        class: FareZone,
+        write: (fz: FareZone) => [fz.id, fz.name],
+        read: (x: any) => x,
+    }, {
+        tag: '¢S',
+        class: Stop,
+        write: (s: Stop) => [s.id, s.zone? s.zone.id : null, s.code, s.desc, s.name, s.url],
+        read: (x: any) => x,
+    }, {
+        tag: '¢R',
+        class: Route,
+        write: (r: Route) => [r.id, r.desc, r.longName, r.shortName, r.url],
+        read: (x: any) => x,
+    }, {
+        tag: '¢DK',
+        class: DirectionKey,
+        write: (dk: DirectionKey) => [dk.routeId, dk.directionId],
+        read: (x: any) => x,
+    }, {
+        tag: '¢T',
+        class: Trip,
+        write: (t: Trip) => [t.id, t.route? t.route.id : null, t.serviceId, t.direction, t.headsign, t.shortName],
+        read: (x: any) => x,
+    }, {
+        tag: '¢TS',
+        class: TripStop,
+        write: (ts: TripStop) => [ts.trip.id, ts.stop.id, ts.arrival, ts.departure, ts.sequence],
+        read: (x: any) => x,
+    }, {
+        tag: '¢SK',
+        class: ServiceStopKey,
+        write: (sk: ServiceStopKey) => [sk.serviceId, sk.direction],
+        read: (x: any) => x,
+    },
+])
+
+export function exportData() {
+    return recordTransit.toJSON({
+        fareZones, stops, routes, trips, tripStops, serviceStopKeysByStopName,
+        serviceStopIds: serviceStops.map(
+            sl => sl.toSeq().map(s => s.id).toArray()),
+        tripIdsByService: tripsByService.map(
+            tl => tl.toSeq().map(t => t.id).toArray()),
+    })
 }
