@@ -201,10 +201,12 @@ let ServicesElement = onlyUpdateForKeys(
             .valueSeq()
             .map(t => [
                 t,
-                caltrain.tripStops.get(t.id).filter(ts => stops.has(ts.stop.name))
-            ] as [caltrain.Trip, List<caltrain.TripStop>])
-            .filter(([_t, tsl]) => tsl.some(ts => ts.departure > props.date.format('HH:MM:SS')))
-            .sortBy(([_t, tsl]) => tsl.first().departure)
+                caltrain.tripStops.get(t.id)
+                    .filter(ts => stops.has(ts.stop.name))
+                    .map(ts => [ts, ts.departureFor(props.date)])
+            ] as [caltrain.Trip, List<[caltrain.TripStop, moment.Moment]>])
+            .filter(([_t, tsl]) => tsl.some(([_ts, departure]) => departure.isAfter(props.date)))
+            .sortBy(([_t, tsl]) => tsl.first()[1])
             .map(([t, _tsl]) => t)
             .toList())
         .entrySeq()

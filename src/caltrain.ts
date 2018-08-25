@@ -295,7 +295,7 @@ export const trips: Map<TripId, Trip> = Seq(caltrain.trips)
 function momentWithTime(m: moment.Moment, time: string): moment.Moment {
     let [hour, minute, second] = time.split(':').map(v => parseInt(v))
     if (hour > 23) {
-        m = m.add(hour / 24, 'days')
+        m = m.clone().add(hour / 24, 'days')
         hour = hour % 24
     }
     return m.clone().set({hour, minute, second})
@@ -384,12 +384,7 @@ const calendarKey: ('monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' |
 
 export function servicesFor(when: moment.Moment = moment()): Set<ServiceId> {
     let whenString = when.format('YYYYMMDD')
-    let exception = Seq(caltrain.calendar_dates)
-        .find(d => d.date == whenString)
-    if (exception) {
-        return Set([isoServiceId.wrap(exception.service_id)])
-    }
-    return Seq(caltrain.calendar)
+    let services = Seq(caltrain.calendar)
         .filter(d => {
             return (
                 whenString >= d.start_date
@@ -399,6 +394,15 @@ export function servicesFor(when: moment.Moment = moment()): Set<ServiceId> {
         })
         .map(d => isoServiceId.wrap(d.service_id))
         .toSet()
+    return Seq(caltrain.calendar_dates)
+        .filter(d => d.date == whenString)
+        .reduce((serviceSet, ex) => {
+            switch (ex.exception_type) {
+            case '1': return serviceSet.add(isoServiceId.wrap(ex.service_id))
+            case '2': return serviceSet.remove(isoServiceId.wrap(ex.service_id))
+            default: return serviceSet
+            }
+        }, services)
 }
 
 // const recordTransit = transit.withExtraHandlers([
