@@ -101,11 +101,16 @@ let TripElement = onlyUpdateForKeys(
     show: Set<string>
     trip: caltrain.Trip
     stops: caltrain.AlignedStops
+    date: moment.Moment
 }) => {
     let stops = props.stops.filter(([s, _ts]) => props.show.has(s.name))
     if (!stops.some(([_s, ts]) => ts != 'never' && ts != 'skipped')) {
         return <></>
     }
+    let firstArrival = stops
+        .valueSeq()
+        .flatMap(([s, ts]) => props.selected.has(s.name) && ts instanceof caltrain.TripStop? [ts.arrivalFor(props.date)] : [])
+        .first()
     return <tr>
         <td>{props.trip.shortName}</td>
         {stops.map(([s, ts], e) => {
@@ -119,7 +124,15 @@ let TripElement = onlyUpdateForKeys(
                     cell = ''
                 }
             } else if (props.selected.has(s.name)) {
-                cell = ts == 'skipped'? '–' : ts.arrival.slice(0, 5)
+                if (ts == 'skipped') {
+                    cell = '–'
+                } else {
+                    let stopDate = ts.arrivalFor(props.date)
+                    cell = stopDate.format('HH:mm')
+                    if (!stopDate.isSame(firstArrival, 'minute')) {
+                        cell = <>{cell} (+{stopDate.diff(firstArrival, 'minutes')}m)</>
+                    }
+                }
             } else {
                 cell = '⋯'
             }
@@ -134,6 +147,7 @@ let TripsElement = onlyUpdateForKeys(
     direction: caltrain.Direction
     selected: Set<string>
     trips: List<caltrain.Trip>
+    date: moment.Moment
 }) => {
     if (props.trips.isEmpty()) {
         return <></>
@@ -176,7 +190,7 @@ let TripsElement = onlyUpdateForKeys(
         <tbody>
             {props.trips.map((trip, e) => {
                 let stops = trip.stopsAlignedTo(allStops)
-                return <TripElement key={e} selected={props.selected} {...{show, trip, stops}} />
+                return <TripElement key={e} {...{show, trip, stops}} {...props} />
             })}
         </tbody>
     </table>
@@ -186,15 +200,9 @@ let ServicesElement = onlyUpdateForKeys(
     ['stops', 'date']
 )((props: {
     stops: Set<string>
-    date: ShowDate
+    date: moment.Moment
 }) => {
-    let date: moment.Moment
-    switch (props.date) {
-    case 'today': date = moment(); break
-    case 'tomorrow': date = moment().add(1, 'day').startOf('day'); break
-    default: date = props.date.startOf('day')
-    }
-    let services = caltrain.servicesFor(date)
+    let services = caltrain.servicesFor(props.date)
     let allServices = Set.intersect<caltrain.ServiceStopKey>(
         props.stops
             .map(s => caltrain.serviceStopKeysByStopName.get(s)))
@@ -209,21 +217,21 @@ let ServicesElement = onlyUpdateForKeys(
                 t,
                 caltrain.tripStops.get(t.id).filter(ts => props.stops.has(ts.stop.name))
             ] as [caltrain.Trip, List<caltrain.TripStop>])
-            .filter(([_t, tsl]) => tsl.some(ts => ts.departure > date.format('HH:MM:SS')))
+            .filter(([_t, tsl]) => tsl.some(ts => ts.departure > props.date.format('HH:MM:SS')))
             .sortBy(([_t, tsl]) => tsl.first().departure)
             .map(([t, _tsl]) => t)
             .toList())
         .entrySeq()
         .sortBy(([k, _v]) => k)
     return <>{trips.map(([direction, trips], e) => <div key={e} className="span-12 pa-v_s">
-        <TripsElement selected={props.stops} {...{direction, trips}} />
+        <TripsElement selected={props.stops} date={props.date} {...{direction, trips}} />
     </div>)}</>
 })
 
 const ConnectedServicesElement = connect(
     (top: State) => {
-        let { stops, date } = top
-        return { stops, date }
+        let { stops } = top
+        return { stops, date: top.dateMoment() }
     },
     undefined,
     undefined,
@@ -237,7 +245,13 @@ export class State extends Record({
     stops: Set<string>(),
     date: 'today' as ShowDate,
 }) {
-
+    dateMoment(): moment.Moment {
+        switch (this.date) {
+        case 'today': return moment()
+        case 'tomorrow': return moment().add(1, 'day').startOf('day')
+        default: return this.date.startOf('day')
+        }
+    }
 }
 
 type AllActions = ActionType<typeof actions>
