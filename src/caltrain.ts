@@ -158,13 +158,15 @@ export const fareZones: Map<ZoneId, FareZone> = Seq(caltrain.farezone_attributes
 
 export interface StopId extends Newtype<{ readonly StopId: unique symbol }, string> {}
 export const isoStopId = iso<StopId>()
+export interface StopName extends Newtype<{ readonly StopName: unique symbol }, string> {}
+export const isoStopName = iso<StopName>()
 
 export class Stop extends Record({
     id: undefined as StopId,
     zone: undefined as FareZone,
     code: '',
     desc: '',
-    name: '',
+    name: undefined as StopName,
     url: '',
 }) {
 }
@@ -178,7 +180,7 @@ export const stops: Map<StopId, Stop> = Seq(caltrain.stops)
             id, zone,
             code: stop.stop_code,
             desc: stop.stop_desc,
-            name: stop.stop_name.replace(' Caltrain', ''),
+            name: isoStopName.wrap(stop.stop_name.replace(' Caltrain', '')),
             url: stop.stop_url,
         })] as [StopId, Stop]
     })
@@ -370,9 +372,9 @@ export const tripsByService: Map<ServiceStopKey, List<Trip>> = trips
     .map(collected => collected.valueSeq().toList())
     .toMap()
 
-export const serviceStopKeysByStopName: Map<string, Set<ServiceStopKey>> = serviceStops
+export const serviceStopKeysByStopName: Map<StopName, Set<ServiceStopKey>> = serviceStops
     .entrySeq()
-    .flatMap(([key, stops]) => stops.map(stop => [stop.name, key] as [string, ServiceStopKey]))
+    .flatMap(([key, stops]) => stops.map(stop => [stop.name, key] as [StopName, ServiceStopKey]))
     .groupBy(([name, _key]) => name)
     .map(collected => collected.valueSeq().map(([_name, key]) => key).toSet())
     .toMap()
