@@ -3,7 +3,7 @@ import * as ReactDOM from 'react-dom'
 import { Provider, connect } from 'react-redux'
 import { onlyUpdateForKeys } from 'recompose'
 import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators } from 'redux'
-import { List, Record, Set, OrderedSet } from 'immutable'
+import { List, Record, Set, OrderedSet, Map } from 'immutable'
 import * as moment from 'moment'
 import { isMoment } from 'moment'
 import { ActionType, getType } from 'typesafe-actions'
@@ -11,6 +11,7 @@ import { ActionType, getType } from 'typesafe-actions'
 import './site.sass'
 import * as actions from './actions'
 import * as caltrain from './caltrain'
+import './realtime'
 
 
 (function() {
@@ -275,6 +276,7 @@ export class Selection extends Record({
 export class State extends Record({
     selection: new Selection(),
     date: 'today' as ShowDate,
+    realtimeUpdates: Map() as caltrain.RealtimeUpdates,
 }) {
     dateMoment(): moment.Moment {
         switch (this.date) {

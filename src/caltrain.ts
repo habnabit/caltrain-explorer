@@ -405,6 +405,20 @@ export function servicesFor(when: moment.Moment = moment()): Set<ServiceId> {
         }, services)
 }
 
+export class TripStopKey extends Record({
+    tripId: undefined as TripId,
+    stopId: undefined as StopId,
+}) {
+}
+
+export class RealtimeUpdate extends Record({
+    departure: undefined as moment.Moment,
+    delay: 0,
+}) {
+}
+
+export type RealtimeUpdates = Map<TripStopKey, RealtimeUpdate>
+
 // const recordTransit = transit.withExtraHandlers([
 //     {
 //         tag: '¢FZ',

@@ -5,6 +5,7 @@
     "build": "webpack"
   },
   "devDependencies": {
+    "@types/pbf": "^3.0.0",
     "@types/react": "^16.4.7",
     "@types/react-dom": "^16.0.6",
     "@types/react-redux": "^6.0.5",
@@ -27,9 +28,11 @@
     "webpack-pwa-manifest": "^3.7.1"
   },
   "dependencies": {
+    "gtfs-rt-bindings": "^1.0.0",
     "immutable": "^4.0.0-rc.9",
     "moment": "^2.22.2",
     "newtype-ts": "^0.2.1",
+    "pbf": "^3.1.0",
     "react": "^16.2",
     "react-dom": "^16.2",
     "react-redux": "^5.0.7",
