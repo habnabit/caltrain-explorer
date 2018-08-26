@@ -410,7 +410,7 @@ function reducer(state = new State(), action: AllActions): State {
 function makeStore<S>(reducer: Reducer<S>, state: DeepPartial<S>): Store<S> {
     const epicMiddleware = createEpicMiddleware()
     const store = createStore(reducer, state, applyMiddleware(epicMiddleware))
-    epicMiddleware.run(realtime.fetchRealtime)
+    //epicMiddleware.run(realtime.fetchRealtime)
     return store
 }
 
