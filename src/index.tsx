@@ -34,7 +34,7 @@ let StopsElement = onlyUpdateForKeys(
     onToggle: typeof actions.toggleStopSelection
 }) => {
     return <div className="flex gap-no read_xl justify-between">
-        {props.zoneStops.entrySeq().map(([zone, stops], i) => <div key={i} className="span-auto flex gap-no read_xl ma-t_s">
+        {props.zoneStops.entrySeq().map(([zone, stops], i) => <div key={i} className="flex gap-no read_xl ma-t_s">
             {stops.map((name, j) => <label key={j} className="box">
                 <input className="checkbox" type="checkbox" checked={props.selection.checkedStops.has(name)} onChange={() => props.onToggle({stop: name})} /> {name}
             </label>)}
