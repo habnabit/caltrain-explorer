@@ -16,7 +16,7 @@ import * as realtime from './realtime'
 
 
 (function() {
-    if ('serviceWorker' in navigator) {
+    if ('serviceWorker' in navigator && location.protocol != 'file:') {
         navigator.serviceWorker.register('service-worker.js')
     }
 })()
