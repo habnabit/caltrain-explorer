@@ -2,7 +2,8 @@ import * as React from 'react'
 import * as ReactDOM from 'react-dom'
 import { Provider, connect } from 'react-redux'
 import { onlyUpdateForKeys } from 'recompose'
-import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators } from 'redux'
+import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware } from 'redux'
+import { createEpicMiddleware } from 'redux-observable'
 import { List, Record, Set, OrderedSet, Map } from 'immutable'
 import * as moment from 'moment'
 import { isMoment } from 'moment'
@@ -11,7 +12,7 @@ import { ActionType, getType } from 'typesafe-actions'
 import './site.sass'
 import * as actions from './actions'
 import * as caltrain from './caltrain'
-import './realtime'
+import * as realtime from './realtime'
 
 
 (function() {
@@ -96,22 +97,23 @@ const ConnectedDateElement = connect(
 )(DateElement)
 
 let TripElement = onlyUpdateForKeys(
-    ['selection', 'show', 'trip', 'stops']
+    ['selection', 'show', 'trip', 'stops', 'date', 'realtimeUpdates']
 )((props: {
     selection: Selection
     show: Set<caltrain.StopName>
     trip: caltrain.Trip
     stops: caltrain.AlignedStops
     date: moment.Moment
+    tripUpdates: TripUpdates
     onSelectReference: typeof actions.selectReferenceStop
 }) => {
     let stops = props.stops.filter(([s, _ts]) => props.show.has(s.name))
     if (!stops.some(([_s, ts]) => ts != 'never' && ts != 'skipped')) {
         return <></>
     }
-    let firstArrival = stops
+    let firstDeparture = stops
         .valueSeq()
-        .flatMap(([s, ts]) => s.name == props.selection.referenceStop && ts instanceof caltrain.TripStop? [ts.arrivalFor(props.date)] : [])
+        .flatMap(([s, ts]) => s.name == props.selection.referenceStop && ts instanceof caltrain.TripStop? [ts.departureFor(props.date)] : [])
         .first()
     return <tr>
         <td>{props.trip.shortName}</td>
@@ -129,10 +131,15 @@ let TripElement = onlyUpdateForKeys(
                 if (ts == 'skipped') {
                     cell = '–'
                 } else {
-                    let stopDate = ts.arrivalFor(props.date)
+                    let realtimeKey = new caltrain.TripStopKey({tripId: props.trip.id, stopId: s.id})
+                    let realtime = props.tripUpdates.get(realtimeKey)
+                    let stopDate = ts.departureFor(props.date)
                     cell = stopDate.format('HH:mm')
-                    if (firstArrival !== undefined && !stopDate.isSame(firstArrival)) {
-                        cell = <>{cell} ({stopDate.diff(firstArrival, 'minutes')}m)</>
+                    if (firstDeparture !== undefined && !stopDate.isSame(firstDeparture)) {
+                        cell = <>{cell} ({stopDate.diff(firstDeparture, 'minutes')}m)</>
+                    }
+                    if (realtime !== undefined) {
+                        cell = <>{cell} {realtime.toJS()}</>
                     }
                 }
             } else {
@@ -144,12 +151,13 @@ let TripElement = onlyUpdateForKeys(
 })
 
 let TripsElement = onlyUpdateForKeys(
-    ['direction', 'selection', 'trips']
+    ['direction', 'selection', 'trips', 'date', 'realtimeUpdates']
 )((props: {
     direction: caltrain.Direction
     selection: Selection
     trips: List<caltrain.Trip>
     date: moment.Moment
+    tripUpdates: TripUpdates
     onSelectReference: typeof actions.selectReferenceStop
 }) => {
     if (props.trips.isEmpty()) {
@@ -176,7 +184,10 @@ let TripsElement = onlyUpdateForKeys(
 })
 
 const ConnectedTripsElement = connect(
-    undefined,
+    (top: State) => {
+        let { tripUpdates } = top
+        return { tripUpdates }
+    },
     (d: Dispatch) => bindActionCreators({
         onSelectReference: actions.selectReferenceStop,
     }, d),
@@ -273,10 +284,13 @@ export class Selection extends Record({
     }
 }
 
+type TripUpdates = Map<caltrain.TripStopKey, realtime.TripUpdate>
+
 export class State extends Record({
     selection: new Selection(),
     date: 'today' as ShowDate,
-    realtimeUpdates: Map() as caltrain.RealtimeUpdates,
+    tripUpdates: Map() as TripUpdates,
+    alerts: List<realtime.ServiceAlert>(),
 }) {
     dateMoment(): moment.Moment {
         switch (this.date) {
@@ -284,6 +298,24 @@ export class State extends Record({
         case 'tomorrow': return moment().add(1, 'day').startOf('day')
         default: return this.date.startOf('day')
         }
+    }
+
+    withRealtimeUpdates(updates: List<realtime.RealtimeUpdate>): this {
+        let alerts = [] as realtime.ServiceAlert[]
+        return this.update('tripUpdates', u => u.withMutations(tripUpdates => {
+            for (let update of updates) {
+                switch (update.kind) {
+                case 'tripUpdate': {
+                    tripUpdates.set(update.tripStop, update)
+                    break
+                }
+                case 'serviceAlert': {
+                    alerts.push(update)
+                    break
+                }
+                }
+            }
+        })).set('alerts', List(alerts))
     }
 }
 
@@ -306,6 +338,11 @@ function reducer(state = new State(), action: AllActions): State {
         return state.set('date', date)
     }
 
+    case getType(actions.fetchRealtime.success): {
+        let { updates } = action.payload
+        return state.withRealtimeUpdates(updates)
+    }
+
     default: {
         return state
     }
@@ -313,21 +350,30 @@ function reducer(state = new State(), action: AllActions): State {
 }
 
 function makeStore<S>(reducer: Reducer<S>, state: DeepPartial<S>): Store<S> {
-    const store = createStore(reducer, state)
+    const epicMiddleware = createEpicMiddleware()
+    const store = createStore(reducer, state, applyMiddleware(epicMiddleware))
+    epicMiddleware.run(realtime.fetchRealtime)
     return store
 }
 
-function makeRootElement(): JSX.Element {
-    let store = makeStore(reducer, new State())
-    return <Provider store={store}>
-        <div className="pa_m">
-            <ConnectedStopsElement />
-            <ConnectedDateElement />
-            <ConnectedServicesElement />
-        </div>
-    </Provider>
+class RootElement extends React.Component {
+    store: Store<State, AnyAction> = makeStore(reducer, new State())
+
+    componentDidMount() {
+        this.store.dispatch(actions.fetchRealtime.request())
+    }
+
+    render() {
+        return <Provider store={this.store}>
+            <div className="pa_m">
+                <ConnectedStopsElement />
+                <ConnectedDateElement />
+                <ConnectedServicesElement />
+            </div>
+        </Provider>
+    }
 }
 
 let root = document.createElement('div')
 document.body.appendChild(root)
-ReactDOM.render(makeRootElement(), root)
+ReactDOM.render(<RootElement />, root)

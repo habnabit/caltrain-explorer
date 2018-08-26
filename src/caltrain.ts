@@ -411,14 +411,6 @@ export class TripStopKey extends Record({
 }) {
 }
 
-export class RealtimeUpdate extends Record({
-    departure: undefined as moment.Moment,
-    delay: 0,
-}) {
-}
-
-export type RealtimeUpdates = Map<TripStopKey, RealtimeUpdate>
-
 // const recordTransit = transit.withExtraHandlers([
 //     {
 //         tag: '¢FZ',
