@@ -2,11 +2,12 @@ import * as React from 'react'
 import * as ReactDOM from 'react-dom'
 import { Provider, connect } from 'react-redux'
 import { onlyUpdateForKeys } from 'recompose'
-import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware } from 'redux'
+import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware, Middleware } from 'redux'
 import { createEpicMiddleware } from 'redux-observable'
 import { List, Record, Set, OrderedSet, Map } from 'immutable'
 import * as moment from 'moment'
 import { isMoment } from 'moment'
+import * as transit from 'transit-immutable-js'
 import { ActionType, getType } from 'typesafe-actions'
 
 import './site.sass'
@@ -358,13 +359,13 @@ export class State extends Record({
         return zoneStops.first()
     }
 
-    recheckingStops(updater: (state: State) => State): State {
+    recheckingStops(updater: (state: State) => State, force = false): State {
         let updated = updater(this)
-        if (this.date === updated.date) {
+        if (!force && this.date === updated.date) {
             return updated
         }
         let zoneStops = updated.zoneStopsFor()
-        if (this.zoneStops.equals(zoneStops)) {
+        if (!force && this.zoneStops.equals(zoneStops)) {
             return updated
         }
         return updated
@@ -373,11 +374,25 @@ export class State extends Record({
     }
 }
 
+const recordTransit = caltrain.recordTransit.withExtraHandlers([
+    {
+        tag: '¢_',
+        class: State,
+        write: (s: State) => [s.selection, s.date],
+        read: ([selection, date]: [Selection, ShowDate]): State => new State({selection, date}),
+    }, {
+        tag: '¢Sl',
+        class: Selection,
+        write: (sel: Selection) => [sel.checkedStops, sel.referenceStop],
+        read: ([checkedStops, referenceStop]: any[]): Selection => new Selection({checkedStops, referenceStop}),
+    },
+])
+
 type AllActions = ActionType<typeof actions>
 
 function reducer(state = new State(), action: AllActions): State {
     if (state.zoneStops.size == 0) {
-        state = state.set('zoneStops', state.zoneStopsFor())
+        state = state.recheckingStops(s => s, true)
     }
 
     switch (action.type) {
@@ -407,15 +422,28 @@ function reducer(state = new State(), action: AllActions): State {
     }
 }
 
-function makeStore<S>(reducer: Reducer<S>, state: DeepPartial<S>): Store<S> {
+const persistState: Middleware = store => next => action => {
+    let result = next(action)
+    let persisted = recordTransit.toJSON(store.getState())
+    localStorage.setItem('state', persisted)
+    return result
+}
+
+function makeStore(reducer: Reducer<State>): Store<State> {
+    let persisted, state
+    if ((persisted = localStorage.getItem('state')) !== null) {
+        state = recordTransit.fromJSON(persisted)
+    } else {
+        state = new State()
+    }
     const epicMiddleware = createEpicMiddleware()
-    const store = createStore(reducer, state, applyMiddleware(epicMiddleware))
+    const store = createStore(reducer, state, applyMiddleware(epicMiddleware, persistState))
     //epicMiddleware.run(realtime.fetchRealtime)
     return store
 }
 
 class RootElement extends React.Component {
-    store: Store<State, AnyAction> = makeStore(reducer, new State())
+    store: Store<State, AnyAction> = makeStore(reducer)
 
     componentDidMount() {
         this.store.dispatch(actions.fetchRealtime.request())

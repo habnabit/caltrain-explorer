@@ -1,7 +1,7 @@
 import { List, Map, Record, Seq, Set } from 'immutable'
 import { iso, Newtype } from 'newtype-ts'
 import * as moment from 'moment'
-//import * as transit from 'transit-immutable-js'
+import * as transit from 'transit-immutable-js'
 const toposort: <T>(edges: [T, T][]) => T[] = require('toposort')
 
 
@@ -411,44 +411,49 @@ export class TripStopKey extends Record({
 }) {
 }
 
-// const recordTransit = transit.withExtraHandlers([
-//     {
-//         tag: '¢FZ',
-//         class: FareZone,
-//         write: (fz: FareZone) => [fz.id, fz.name],
-//         read: (x: any) => x,
-//     }, {
-//         tag: '¢S',
-//         class: Stop,
-//         write: (s: Stop) => [s.id, s.zone? s.zone.id : null, s.code, s.desc, s.name, s.url],
-//         read: (x: any) => x,
-//     }, {
-//         tag: '¢R',
-//         class: Route,
-//         write: (r: Route) => [r.id, r.desc, r.longName, r.shortName, r.url],
-//         read: (x: any) => x,
-//     }, {
-//         tag: '¢DK',
-//         class: DirectionKey,
-//         write: (dk: DirectionKey) => [dk.routeId, dk.directionId],
-//         read: (x: any) => x,
-//     }, {
-//         tag: '¢T',
-//         class: Trip,
-//         write: (t: Trip) => [t.id, t.route? t.route.id : null, t.serviceId, t.direction, t.headsign, t.shortName],
-//         read: (x: any) => x,
-//     }, {
-//         tag: '¢TS',
-//         class: TripStop,
-//         write: (ts: TripStop) => [ts.trip.id, ts.stop.id, ts.arrival, ts.departure, ts.sequence],
-//         read: (x: any) => x,
-//     }, {
-//         tag: '¢SK',
-//         class: ServiceStopKey,
-//         write: (sk: ServiceStopKey) => [sk.serviceId, sk.direction],
-//         read: (x: any) => x,
-//     },
-// ])
+export const recordTransit = transit.withExtraHandlers([
+    {
+        tag: '¢FZ',
+        class: FareZone,
+        write: (fz: FareZone) => [fz.id, fz.name],
+        read: (x: any) => x,
+    }, {
+        tag: '¢S',
+        class: Stop,
+        write: (s: Stop) => [s.id, s.zone? s.zone.id : null, s.code, s.desc, s.name, s.url],
+        read: (x: any) => x,
+    }, {
+        tag: '¢R',
+        class: Route,
+        write: (r: Route) => [r.id, r.desc, r.longName, r.shortName, r.url],
+        read: (x: any) => x,
+    }, {
+        tag: '¢DK',
+        class: DirectionKey,
+        write: (dk: DirectionKey) => [dk.routeId, dk.directionId],
+        read: (x: any) => x,
+    }, {
+        tag: '¢T',
+        class: Trip,
+        write: (t: Trip) => [t.id, t.route? t.route.id : null, t.serviceId, t.direction, t.headsign, t.shortName],
+        read: (x: any) => x,
+    }, {
+        tag: '¢TS',
+        class: TripStop,
+        write: (ts: TripStop) => [ts.trip.id, ts.stop.id, ts.arrival, ts.departure, ts.sequence],
+        read: (x: any) => x,
+    }, {
+        tag: '¢SK',
+        class: ServiceStopKey,
+        write: (sk: ServiceStopKey) => [sk.serviceId, sk.direction],
+        read: (x: any) => x,
+    }, {
+        tag: 'moment',
+        class: moment.fn.constructor,
+        write: (m: moment.Moment) => m.format(),
+        read: (x: any): moment.Moment => moment(x),
+    },
+])
 
 // export function exportData() {
 //     return recordTransit.toJSON({
