@@ -4,7 +4,7 @@ import { Provider, connect } from 'react-redux'
 import { onlyUpdateForKeys } from 'recompose'
 import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware } from 'redux'
 import { createEpicMiddleware } from 'redux-observable'
-import { List, Record, Set, OrderedSet, Map } from 'immutable'
+import { List, Record, Set, OrderedSet, Map, Seq } from 'immutable'
 import * as moment from 'moment'
 import { isMoment } from 'moment'
 import { ActionType, getType } from 'typesafe-actions'
@@ -27,32 +27,33 @@ function momentsAndOrEqual<T>(a: T, b: T): boolean {
 }
 
 let StopsElement = onlyUpdateForKeys(
-    ['selection']
+    ['selection', 'zoneStops']
 )((props: {
     selection: Selection
+    zoneStops: Map<caltrain.FareZone, List<caltrain.StopName>>
     onToggle: typeof actions.toggleStopSelection
 }) => {
-    return <div className="flex gap-no read_xl">
-        {caltrain.serviceStopKeysByStopName.keySeq().sort().map((name, e) => {
-            return <label key={e} className="box">
+    return <div className="flex gap-no read_xl justify-between">
+        {props.zoneStops.entrySeq().map(([zone, stops], i) => <div key={i} className="span-auto flex gap-no read_xl ma-t_s">
+            {stops.map((name, j) => <label key={j} className="box">
                 <input className="checkbox" type="checkbox" checked={props.selection.checkedStops.has(name)} onChange={() => props.onToggle({stop: name})} /> {name}
-            </label>
-        })}
+            </label>)}
+        </div>)}
     </div>
 })
 
 const ConnectedStopsElement = connect(
     (top: State) => {
-        let { selection } = top
-        return { selection }
+        let { selection, zoneStops } = top
+        return { selection, zoneStops }
     },
     (d: Dispatch) => bindActionCreators({
         onToggle: actions.toggleStopSelection,
     }, d),
     undefined,
     {
-        areStatesEqual: (x, y) => x.selection === y.selection,
-        areStatePropsEqual: (x, y) => x.selection === y.selection,
+        areStatesEqual: (x, y) => x.selection === y.selection && momentsAndOrEqual(x.date, y.date),
+        areStatePropsEqual: (x, y) => x.selection === y.selection && x.zoneStops === y.zoneStops,
     },
 )(StopsElement)
 
@@ -255,6 +256,17 @@ export class Selection extends Record({
         })
     }
 
+    recheckingZoneStops(zoneStops: ZoneStops): Selection {
+        let visibleStops = zoneStops
+            .valueSeq()
+            .flatMap(l => l)
+            .toSet()
+        return new Selection({
+            checkedStops: this.checkedStops.intersect(visibleStops),
+            referenceStop: visibleStops.get(this.referenceStop),
+        })
+    }
+
     stopsToShow(allStops: List<caltrain.Stop>): OrderedSet<caltrain.StopName> {
         let showIndices = allStops
             .toSeq()
@@ -285,9 +297,11 @@ export class Selection extends Record({
 }
 
 type TripUpdates = Map<caltrain.TripStopKey, realtime.TripUpdate>
+type ZoneStops = Map<caltrain.FareZone, List<caltrain.StopName>>
 
 export class State extends Record({
     selection: new Selection(),
+    zoneStops: Map() as ZoneStops,
     date: 'today' as ShowDate,
     tripUpdates: Map() as TripUpdates,
     alerts: List<realtime.ServiceAlert>(),
@@ -317,11 +331,55 @@ export class State extends Record({
             }
         })).set('alerts', List(alerts))
     }
+
+    zoneStopsFor(date: moment.Moment = this.dateMoment()) {
+        let zoneStops = caltrain.servicesFor(date)
+            .valueSeq()
+            .flatMap(serviceId => {
+                let stops = caltrain.serviceStops.get(
+                    new caltrain.ServiceStopKey({serviceId, direction: 'South'}))
+                if (stops === undefined) {
+                    return []
+                }
+                return [
+                    stops
+                        .groupBy(stop => stop.zone)
+                        .map(collected => collected
+                            .valueSeq()
+                            .map(stop => stop.name)
+                            .toList())
+                        .toMap()
+                ]
+            })
+            .toSet()
+        if (zoneStops.size != 1) {
+            console.log('oh no zones', zoneStops.toJS())
+        }
+        return zoneStops.first()
+    }
+
+    recheckingStops(updater: (state: State) => State): State {
+        let updated = updater(this)
+        if (this.date === updated.date) {
+            return updated
+        }
+        let zoneStops = updated.zoneStopsFor()
+        if (this.zoneStops.equals(zoneStops)) {
+            return updated
+        }
+        return updated
+            .set('zoneStops', zoneStops)
+            .update('selection', sel => sel.recheckingZoneStops(zoneStops))
+    }
 }
 
 type AllActions = ActionType<typeof actions>
 
 function reducer(state = new State(), action: AllActions): State {
+    if (state.zoneStops.size == 0) {
+        state = state.set('zoneStops', state.zoneStopsFor())
+    }
+
     switch (action.type) {
     case getType(actions.toggleStopSelection): {
         let { stop } = action.payload
@@ -335,7 +393,7 @@ function reducer(state = new State(), action: AllActions): State {
 
     case getType(actions.setDate): {
         let { date } = action.payload
-        return state.set('date', date)
+        return state.recheckingStops(s => s.set('date', date))
     }
 
     case getType(actions.fetchRealtime.success): {
@@ -366,8 +424,8 @@ class RootElement extends React.Component {
     render() {
         return <Provider store={this.store}>
             <div className="pa_m">
-                <ConnectedStopsElement />
                 <ConnectedDateElement />
+                <ConnectedStopsElement />
                 <ConnectedServicesElement />
             </div>
         </Provider>
