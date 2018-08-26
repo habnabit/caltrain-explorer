@@ -1,12 +1,12 @@
 import * as gtfsRealtime from 'gtfs-rt-bindings'
-import { Map, Seq, Record, List } from 'immutable'
+import { Seq, Record, List } from 'immutable'
 import * as moment from 'moment'
-import * as Pbf from 'pbf'
+import Pbf = require('pbf')
 import * as qs from 'qs'
 import { Epic } from 'redux-observable'
 import { from, of, merge, interval } from 'rxjs'
-import { filter, switchMap, map, catchError, delay, tap } from 'rxjs/operators'
-import { ActionType, getType, isActionOf } from 'typesafe-actions'
+import { filter, switchMap, map, catchError, tap } from 'rxjs/operators'
+import { ActionType, isActionOf } from 'typesafe-actions'
 
 import * as actions from './actions'
 import * as caltrain from './caltrain'
