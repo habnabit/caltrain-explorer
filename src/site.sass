@@ -1,11 +1,20 @@
 @import 'teutonic-css/teutonic.scss'
 
-table.table
-    td.reference-col, th.reference-col
-        background-color: var(--color-warn-1)
+table.table.trip-table
+
+    tr
+        > td, > th
+            background-color: var(--color-bg-1, var(--color-main-1))
+
+            &.realtime
+                color: var(--color-main-1)
+                --color-bg-1: var(--color-bg-4, var(--color-main-4))
+                --color-bg-2: var(--color-bg-5, var(--color-main-5))
+
+            &.reference-col
+                --color-bg-1: var(--color-warn-1)
+                --color-bg-2: var(--color-warn-2)
 
     tr:nth-child(even)
-        background-color: var(--color-prime-2)
-
-        td.reference-col, th.reference-col
-            background-color: var(--color-warn-2)
+        > td, > th
+            background-color: var(--color-bg-2, var(--color-main-2))

@@ -4,8 +4,8 @@ import * as moment from 'moment'
 import Pbf = require('pbf')
 import * as qs from 'qs'
 import { Epic } from 'redux-observable'
-import { from, of, merge, interval } from 'rxjs'
-import { filter, switchMap, map, catchError, tap } from 'rxjs/operators'
+import { from, of, merge, interval, forkJoin, Observable } from 'rxjs'
+import { filter, switchMap, map, catchError, tap, mergeAll, bufferCount, mergeMap } from 'rxjs/operators'
 import { ActionType, isActionOf } from 'typesafe-actions'
 
 import * as actions from './actions'
@@ -33,26 +33,31 @@ function reverseEnum(value: number, enumMap: EnumMap): string {
     return Seq.Keyed(enumMap).findEntry((n) => n == value)[0]
 }
 
+type RawGtfs = {
+    inner: any
+    outer: any
+}
+
 export class TripUpdate extends Record({
     kind: 'tripUpdate' as 'tripUpdate',
+    _raw: {} as RawGtfs,
     tripStop: undefined as caltrain.TripStopKey,
     departure: undefined as moment.Moment,
-    delay: 0,
 }) {
     static fromPbf(update: any): Seq.Indexed<RealtimeUpdate> {
         let tripId = caltrain.isoTripId.wrap(update.trip.trip_id)
         return Seq.Indexed(update.stop_time_update as any[]).map((stopUpdate) => {
             let stopId = caltrain.isoStopId.wrap(stopUpdate.stop_id)
-            let departure = moment(stopUpdate.departure.time * 1000)
-            let delay = stopUpdate.departure.delay as number
+            let departure = moment(stopUpdate.departure.time * 1000).local()
             let tripStop = new caltrain.TripStopKey({tripId, stopId})
-            return new TripUpdate({tripStop, departure, delay})
+            return new TripUpdate({tripStop, departure, _raw: {inner: stopUpdate, outer: update}})
         })
     }
 }
 
 export class ServiceAlert extends Record({
     kind: 'serviceAlert' as 'serviceAlert',
+    _raw: {} as RawGtfs,
     activeSince: undefined as moment.Moment,
     activeUntil: undefined as moment.Moment,
     cause: '',
@@ -85,8 +90,8 @@ export class ServiceAlert extends Record({
         let now = moment()
         let active = Seq.Indexed(alert.active_period as {start: number, end: number}[])
             .flatMap(({start, end}) => {
-                let activeSince = moment(start * 1000)
-                let activeUntil = moment(end * 1000)
+                let activeSince = moment(start * 1000).local()
+                let activeUntil = moment(end * 1000).local()
                 if (now.isBetween(activeSince, activeUntil)) {
                     return [{activeSince, activeUntil}]
                 } else {
@@ -105,6 +110,7 @@ export class ServiceAlert extends Record({
                 description: englishTranslationOf(alert.description_text),
                 routeIds: List(routeIds),
                 stopIds: List(stopIds),
+                _raw: {inner: alert},
             }, active))
         ])
     }
@@ -112,6 +118,7 @@ export class ServiceAlert extends Record({
 
 export class VehiclePosition extends Record({
     kind: 'vehiclePosition' as 'vehiclePosition',
+    _raw: {} as RawGtfs,
 }) {
     static fromPbf(vehicle: any): Seq.Indexed<RealtimeUpdate> {
         return Seq.Indexed()
@@ -123,15 +130,13 @@ export type RealtimeUpdate = TripUpdate | ServiceAlert | VehiclePosition
 export const fetchRealtime: Epic<AllActions, AllActions> = (action$) => (
     action$.pipe(
         filter(isActionOf(actions.fetchRealtime.request)),
-        switchMap(_action => {
-            return merge(
-                from(fetch('https://api.511.org/transit/tripupdates?' + API_QS)),
-                from(fetch('https://api.511.org/transit/servicealerts?' + API_QS)),
-                from(fetch('https://api.511.org/transit/vehiclepositions?' + API_QS)),
-            ).pipe(
-                switchMap((r: Response) => r.arrayBuffer()),
-            )
-        }),
+        switchMap(_action => of(
+            from(fetch('https://api.511.org/transit/tripupdates?' + API_QS)),
+            from(fetch('https://api.511.org/transit/servicealerts?' + API_QS)),
+            from(fetch('https://api.511.org/transit/vehiclepositions?' + API_QS)),
+        )),
+        mergeAll(),
+        switchMap((r: Response) => r.arrayBuffer()),
         map((buf) => {
             let p = new Pbf(new Uint8Array(buf))
             let feed = gtfsRealtime.FeedMessage.read(p)
@@ -147,17 +152,25 @@ export const fetchRealtime: Epic<AllActions, AllActions> = (action$) => (
                 }
             })
         }),
-        tap((updates) => console.log(updates.toJS())),
         map((updates) => actions.fetchRealtime.success({updates})),
         catchError((error) => of(actions.fetchRealtime.failure(error))),
+        bufferCount(3),
+        mergeMap((events: AllActions[]): Observable<AllActions> => {
+            let updates = Seq.Indexed(events)
+                .filter(isActionOf(actions.fetchRealtime.success))
+                .flatMap((a) => a.payload.updates)
+                .toList()
+            let merged = Seq.Indexed(events)
+                .filterNot(isActionOf(actions.fetchRealtime.success))
+                .concat([actions.fetchRealtime.success({updates})])
+                .toArray()
+            return of(...merged)
+        }),
         (prev => merge(
             interval(60000).pipe(
                 map((count) => actions.fetchRealtime.request()),
             ),
             prev,
         )),
-        tap((action) => {
-            console.log(action)
-        }),
     )
 )

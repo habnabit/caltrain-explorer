@@ -4,7 +4,7 @@ import { Provider, connect } from 'react-redux'
 import { onlyUpdateForKeys } from 'recompose'
 import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware, Middleware } from 'redux'
 import { createEpicMiddleware } from 'redux-observable'
-import { List, Record, Set, OrderedSet, Map } from 'immutable'
+import { List, Record, Set, OrderedSet, Map, Seq } from 'immutable'
 import * as moment from 'moment'
 import { isMoment } from 'moment'
 import * as transit from 'transit-immutable-js'
@@ -99,7 +99,7 @@ const ConnectedDateElement = connect(
 )(DateElement)
 
 let TripElement = onlyUpdateForKeys(
-    ['selection', 'show', 'trip', 'stops', 'date', 'realtimeUpdates']
+    ['selection', 'show', 'trip', 'stops', 'date', 'tripUpdates']
 )((props: {
     selection: Selection
     show: Set<caltrain.StopName>
@@ -117,10 +117,23 @@ let TripElement = onlyUpdateForKeys(
         .valueSeq()
         .flatMap(([s, ts]) => s.name == props.selection.referenceStop && ts instanceof caltrain.TripStop? [ts.departureFor(props.date)] : [])
         .first()
+    let now = moment()
+    let currentStop: 'searching' | 'found' = 'searching'
     return <tr>
         <td>{props.trip.shortName}</td>
         {stops.map(([s, ts], e) => {
             let cell
+            let realtimeDelay: number | undefined = undefined
+            let parts = ['']
+            function addPart(value: number | undefined, neg: string, pos: string): void {
+                if (value === undefined) {
+                } else if (value > 0) {
+                    parts.push(`${pos}${value}m`)
+                } else if (value < 0) {
+                    parts.push(`${neg}${-value}m`)
+                }
+            }
+
             if (ts == 'never') {
                 if (e != 0 && stops.get(e - 1)[1] != 'never') {
                     cell = '⊁'
@@ -135,25 +148,57 @@ let TripElement = onlyUpdateForKeys(
                 } else {
                     let realtimeKey = new caltrain.TripStopKey({tripId: props.trip.id, stopId: s.id})
                     let realtime = props.tripUpdates.get(realtimeKey)
-                    let stopDate = ts.departureFor(props.date)
-                    cell = stopDate.format('HH:mm')
-                    if (firstDeparture !== undefined && !stopDate.isSame(firstDeparture)) {
-                        cell = <>{cell} ({stopDate.diff(firstDeparture, 'minutes')}m)</>
-                    }
+                    let stopDate: moment.Moment
+                    let scheduled = ts.departureFor(props.date)
                     if (realtime !== undefined) {
-                        cell = <>{cell} {realtime.toJS()}</>
+                        stopDate = realtime.departure
+                        realtimeDelay = stopDate.diff(scheduled, 'minute')
+                        if (realtimeDelay < -12 * 60) {
+                            [stopDate, realtimeDelay] = [scheduled, undefined]
+                        } else if (realtimeDelay > 0 || realtimeDelay < 0) {
+                            console.log({realtimeDelay, realtime})
+                        }
+                    } else {
+                        stopDate = scheduled
+                    }
+                    cell = stopDate.format('HH:mm')
+                    addPart(realtimeDelay, '≫', '≪')
+                    addPart(
+                        firstDeparture !== undefined? stopDate.diff(firstDeparture, 'minutes') : undefined,
+                        '≺', '≻')
+                    let untilStop = stopDate.diff(now, 'minutes')
+                    if (currentStop == 'searching' && untilStop > 0) {
+                        if (untilStop < 3 * 60) {
+                            cell = `➘${cell}`
+                        }
+                        currentStop = 'found'
+                    }
+                    if (Math.abs(untilStop) < 3 * 60) {
+                        addPart(untilStop, '➚', '➘')
                     }
                 }
             } else {
                 cell = '⋯'
             }
-            return <td key={e} className={'text-center ' + (props.selection.referenceStop == s.name? 'reference-col' : '')} onClick={() => props.onSelectReference({stop: s.name})}>{cell}</td>
+            parts[0] = cell
+
+            let classes = ['text-center']
+            if (realtimeDelay !== undefined) {
+                classes.push('realtime')
+                let theme = realtimeDelay > 0? 'danger'  // late
+                    : realtimeDelay < 0? 'warning'  // early
+                    : 'success'  // on time
+                classes.push('tinted-bg-' + theme)
+            } else if (props.selection.referenceStop == s.name) {
+                classes.push('reference-col')
+            }
+            return <td key={e} className={classes.join(' ')} onClick={() => props.onSelectReference({stop: s.name})}>{parts.join(' ')}</td>
         })}
     </tr>
 })
 
 let TripsElement = onlyUpdateForKeys(
-    ['direction', 'selection', 'trips', 'date', 'realtimeUpdates']
+    ['direction', 'selection', 'trips', 'date', 'tripUpdates']
 )((props: {
     direction: caltrain.Direction
     selection: Selection
@@ -169,7 +214,7 @@ let TripsElement = onlyUpdateForKeys(
     let service = new caltrain.ServiceStopKey(aTrip)
     let allStops = caltrain.serviceStops.get(service)
     let show = props.selection.stopsToShow(allStops)
-    return <table className="table bo-no fixed dense">
+    return <table className="table bo-no fixed dense trip-table">
         <thead>
             <tr>
                 <th>{props.direction}</th>
@@ -317,7 +362,8 @@ export class State extends Record({
 
     withRealtimeUpdates(updates: List<realtime.RealtimeUpdate>): this {
         let alerts = [] as realtime.ServiceAlert[]
-        return this.update('tripUpdates', u => u.withMutations(tripUpdates => {
+        let newUpdates: TripUpdates = Map()
+        newUpdates = newUpdates.withMutations(tripUpdates => {
             for (let update of updates) {
                 switch (update.kind) {
                 case 'tripUpdate': {
@@ -330,7 +376,8 @@ export class State extends Record({
                 }
                 }
             }
-        })).set('alerts', List(alerts))
+        })
+        return this.merge({tripUpdates: newUpdates, alerts: List(alerts)})
     }
 
     zoneStopsFor(date: moment.Moment = this.dateMoment()) {
@@ -403,7 +450,8 @@ function reducer(state = new State(), action: AllActions): State {
 
     case getType(actions.selectReferenceStop): {
         let { stop } = action.payload
-        return state.update('selection', s => s.set('referenceStop', stop))
+        return state.update('selection', s =>
+            s.update('referenceStop', r => r == stop? undefined : stop))
     }
 
     case getType(actions.setDate): {
@@ -438,7 +486,7 @@ function makeStore(reducer: Reducer<State>): Store<State> {
     }
     const epicMiddleware = createEpicMiddleware()
     const store = createStore(reducer, state, applyMiddleware(epicMiddleware, persistState))
-    //epicMiddleware.run(realtime.fetchRealtime)
+    epicMiddleware.run(realtime.fetchRealtime)
     return store
 }
 
