@@ -1,7 +1,7 @@
 import * as React from 'react'
 import * as ReactDOM from 'react-dom'
 import { Provider, connect } from 'react-redux'
-import { onlyUpdateForKeys } from 'recompose'
+import { onlyUpdateForKeys, compose, withState, mapPropsStream } from 'recompose'
 import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware, Middleware } from 'redux'
 import { createEpicMiddleware } from 'redux-observable'
 import { List, Record, Set, OrderedSet, Map, Seq } from 'immutable'
@@ -14,6 +14,8 @@ import './site.sass'
 import * as actions from './actions'
 import * as caltrain from './caltrain'
 import * as realtime from './realtime'
+import { interval, combineLatest, merge, of } from 'rxjs';
+import { map } from 'rxjs/operators';
 
 
 (function() {
@@ -34,7 +36,7 @@ let StopsElement = onlyUpdateForKeys(
     zoneStops: Map<caltrain.FareZone, List<caltrain.StopName>>
     onToggle: typeof actions.toggleStopSelection
 }) => {
-    return <div className="flex gap-no read_xl justify-between">
+    return <div className="flex read_xl justify-between">
         {props.zoneStops.entrySeq().map(([zone, stops], i) => <div key={i} className="flex gap-no read_xl ma-t_s">
             {stops.map((name, j) => <label key={j} className="box">
                 <input className="checkbox" type="checkbox" checked={props.selection.checkedStops.has(name)} onChange={() => props.onToggle({stop: name})} /> {name}
@@ -288,6 +290,68 @@ const ConnectedServicesElement = connect(
     },
 )(ServicesElement)
 
+type FetchState = 'idle' | 'fetching' | moment.Moment
+
+const enhanceWithNow = mapPropsStream((props$) => {
+    return combineLatest(
+        props$,
+        merge(of(0), interval(5000)),
+    ).pipe(
+        map(([props, _interval]) => ({...props, now: moment()}))
+    )
+})
+
+const RealtimeFetchElement = compose<{
+    fetchState: FetchState
+    dataFrom: moment.Moment | undefined
+    now: moment.Moment
+    onRefetch: typeof actions.fetchRealtime.request
+}, {}>(
+    onlyUpdateForKeys(['fetchState', 'dataFrom']),
+    enhanceWithNow,
+)((props) => {
+    let staleness, dataStatus, tint
+    if (props.dataFrom !== undefined) {
+        staleness = `${props.now.diff(props.dataFrom, 'seconds')}s stale`
+        dataStatus = 'Realtime data shown'
+        tint = 'success'
+    } else {
+        staleness = 'never fetched'
+        dataStatus = 'No realtime data'
+        tint = 'danger'
+    }
+    let nextFetch = props.fetchState == 'fetching'? 'fetching'
+        : props.fetchState == 'idle'? ''
+        : `fetch in ${props.fetchState.diff(props.now, 'seconds')}s`
+    return <div className={`pos-sticky zi-4 box bg-0 tinted-${tint}`} style={({
+        width: '30rem',
+        maxWidth: '100%',
+        top: 'var(--space-m)',
+    })}>
+        <div className="grid gap-no">
+            <div className="box bg-1 span-12">{dataStatus}</div>
+            <div className="box bg-1 span-4">{staleness}</div>
+            <div className="box bg-1 span-4">{nextFetch}</div>
+            <button className="button span-4" onClick={() => props.onRefetch()}>Refetch</button>
+        </div>
+    </div>
+})
+
+const ConnectedRealtimeFetchElement = connect(
+    (top: State) => {
+        let { fetchState, dataFrom } = top
+        return { fetchState, dataFrom }
+    },
+    (d: Dispatch) => bindActionCreators({
+        onRefetch: actions.fetchRealtime.request,
+    }, d),
+    undefined,
+    {
+        areStatesEqual: (x, y) => momentsAndOrEqual(x.fetchState, y.fetchState) && momentsAndOrEqual(x.dataFrom, y.dataFrom),
+        areStatePropsEqual: (x, y) => momentsAndOrEqual(x.fetchState, y.fetchState) && momentsAndOrEqual(x.dataFrom, y.dataFrom),
+    },
+)(RealtimeFetchElement)
+
 export class Selection extends Record({
     checkedStops: Set<caltrain.StopName>(),
     referenceStop: undefined as caltrain.StopName | undefined,
@@ -351,6 +415,8 @@ export class State extends Record({
     date: 'today' as ShowDate,
     tripUpdates: Map() as TripUpdates,
     alerts: List<realtime.ServiceAlert>(),
+    fetchState: 'idle' as FetchState,
+    dataFrom: undefined as moment.Moment | undefined,
 }) {
     dateMoment(): moment.Moment {
         switch (this.date) {
@@ -360,11 +426,11 @@ export class State extends Record({
         }
     }
 
-    withRealtimeUpdates(updates: List<realtime.RealtimeUpdate>): this {
+    withRealtimeUpdates(updatePayload: actions.UpdatePayload): this {
         let alerts = [] as realtime.ServiceAlert[]
         let newUpdates: TripUpdates = Map()
         newUpdates = newUpdates.withMutations(tripUpdates => {
-            for (let update of updates) {
+            for (let update of updatePayload.updates) {
                 switch (update.kind) {
                 case 'tripUpdate': {
                     tripUpdates.set(update.tripStop, update)
@@ -377,7 +443,12 @@ export class State extends Record({
                 }
             }
         })
-        return this.merge({tripUpdates: newUpdates, alerts: List(alerts)})
+        return this.merge({
+            tripUpdates: newUpdates,
+            alerts: List(alerts),
+            fetchState: 'idle',
+            dataFrom: newUpdates.size == 0? undefined : updatePayload.dataFrom,
+        })
     }
 
     zoneStopsFor(date: moment.Moment = this.dateMoment()) {
@@ -459,9 +530,16 @@ function reducer(state = new State(), action: AllActions): State {
         return state.recheckingStops(s => s.set('date', date))
     }
 
+    case getType(actions.fetchRealtime.request): {
+        return state.set('fetchState', 'fetching')
+    }
+
     case getType(actions.fetchRealtime.success): {
-        let { updates } = action.payload
-        return state.withRealtimeUpdates(updates)
+        return state.withRealtimeUpdates(action.payload)
+    }
+
+    case getType(actions.requestRealtimeAt): {
+        return state.set('fetchState', action.payload.at)
     }
 
     default: {
@@ -487,6 +565,7 @@ function makeStore(reducer: Reducer<State>): Store<State> {
     const epicMiddleware = createEpicMiddleware()
     const store = createStore(reducer, state, applyMiddleware(epicMiddleware, persistState))
     epicMiddleware.run(realtime.fetchRealtime)
+    epicMiddleware.run(realtime.scheduleRealtime)
     return store
 }
 
@@ -494,12 +573,13 @@ class RootElement extends React.Component {
     store: Store<State, AnyAction> = makeStore(reducer)
 
     componentDidMount() {
-        this.store.dispatch(actions.fetchRealtime.request())
+        this.store.dispatch(actions.initRealtime())
     }
 
     render() {
         return <Provider store={this.store}>
             <div className="pa_m">
+                <ConnectedRealtimeFetchElement />
                 <ConnectedDateElement />
                 <ConnectedStopsElement />
                 <ConnectedServicesElement />

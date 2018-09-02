@@ -4,12 +4,13 @@ import * as moment from 'moment'
 import Pbf = require('pbf')
 import * as qs from 'qs'
 import { Epic } from 'redux-observable'
-import { from, of, merge, interval, forkJoin, Observable } from 'rxjs'
-import { filter, switchMap, map, catchError, tap, mergeAll, bufferCount, mergeMap } from 'rxjs/operators'
-import { ActionType, isActionOf } from 'typesafe-actions'
+import { from, of, merge, interval, Observable, forkJoin, ObservableInput, timer } from 'rxjs'
+import { filter, switchMap, map, catchError, tap, mergeMap, delay } from 'rxjs/operators'
+import { ActionType, isActionOf, getType } from 'typesafe-actions'
 
 import * as actions from './actions'
 import * as caltrain from './caltrain'
+import { Type as Result, isOk } from './result'
 
 
 type AllActions = ActionType<typeof actions>
@@ -126,51 +127,84 @@ export class VehiclePosition extends Record({
 }
 
 export type RealtimeUpdate = TripUpdate | ServiceAlert | VehiclePosition
+type FetchedAndParsed = Result<{
+    updates: List<RealtimeUpdate>,
+    timestamp: moment.Moment,
+}>
+
+const fetchAndParse: (url: string) => Observable<FetchedAndParsed> = (url: string) => of(url).pipe(
+    switchMap((url: string) => fetch(url)),
+    switchMap((r: Response) => r.arrayBuffer()),
+    map((buf): FetchedAndParsed => {
+        let p = new Pbf(new Uint8Array(buf))
+        let feed = gtfsRealtime.FeedMessage.read(p)
+        let updates = List<RealtimeUpdate>().withMutations(ret => {
+            for (let entity of feed.entity) {
+                if (entity.trip_update !== null) {
+                    ret.concat(TripUpdate.fromPbf(entity.trip_update))
+                } else if (entity.alert !== null) {
+                    ret.concat(ServiceAlert.fromPbf(entity.alert))
+                } else if (entity.vehicle !== null) {
+                    ret.concat(VehiclePosition.fromPbf(entity.vehicle))
+                }
+            }
+        })
+        let timestamp = moment(feed.header.timestamp * 1000)
+        return { updates, timestamp }
+    }),
+    catchError<FetchedAndParsed, FetchedAndParsed>((error) => of(error)),
+)
 
 export const fetchRealtime: Epic<AllActions, AllActions> = (action$) => (
     action$.pipe(
         filter(isActionOf(actions.fetchRealtime.request)),
-        switchMap(_action => of(
-            from(fetch('https://api.511.org/transit/tripupdates?' + API_QS)),
-            from(fetch('https://api.511.org/transit/servicealerts?' + API_QS)),
-            from(fetch('https://api.511.org/transit/vehiclepositions?' + API_QS)),
-        )),
-        mergeAll(),
-        switchMap((r: Response) => r.arrayBuffer()),
-        map((buf) => {
-            let p = new Pbf(new Uint8Array(buf))
-            let feed = gtfsRealtime.FeedMessage.read(p)
-            return List<RealtimeUpdate>().withMutations(ret => {
-                for (let entity of feed.entity) {
-                    if (entity.trip_update !== null) {
-                        ret.concat(TripUpdate.fromPbf(entity.trip_update))
-                    } else if (entity.alert !== null) {
-                        ret.concat(ServiceAlert.fromPbf(entity.alert))
-                    } else if (entity.vehicle !== null) {
-                        ret.concat(VehiclePosition.fromPbf(entity.vehicle))
+        switchMap(action => {
+            return of([
+                'https://api.511.org/transit/tripupdates?' + API_QS,
+                'https://api.511.org/transit/servicealerts?' + API_QS,
+                'https://api.511.org/transit/vehiclepositions?' + API_QS,
+            ]).pipe(
+                mergeMap<string[], FetchedAndParsed[]>((urls) => forkJoin(...urls.map((url) => fetchAndParse(url)))),
+            )
+        }),
+        mergeMap((results: FetchedAndParsed[]) => {
+            let ret: AllActions[] = []
+            let latestTimestamp: moment.Moment | undefined = undefined
+            let updates = List<RealtimeUpdate>().withMutations(u => {
+                for (let r of results) {
+                    if (isOk(r)) {
+                        u.concat(r.updates)
+                        if (latestTimestamp === undefined || r.timestamp.isAfter(latestTimestamp)) {
+                            latestTimestamp = r.timestamp
+                        }
+                    } else {
+                        ret.push(actions.fetchRealtime.failure(r))
                     }
                 }
             })
+            let dataFrom = latestTimestamp !== undefined? latestTimestamp : moment()
+            let nextFetchAt = dataFrom.clone().add(1, 'minute')
+            ret.push(actions.fetchRealtime.success({updates, dataFrom}))
+            ret.push(actions.requestRealtimeAt({at: nextFetchAt}))
+            return ret
         }),
-        map((updates) => actions.fetchRealtime.success({updates})),
-        catchError((error) => of(actions.fetchRealtime.failure(error))),
-        bufferCount(3),
-        mergeMap((events: AllActions[]): Observable<AllActions> => {
-            let updates = Seq.Indexed(events)
-                .filter(isActionOf(actions.fetchRealtime.success))
-                .flatMap((a) => a.payload.updates)
-                .toList()
-            let merged = Seq.Indexed(events)
-                .filterNot(isActionOf(actions.fetchRealtime.success))
-                .concat([actions.fetchRealtime.success({updates})])
-                .toArray()
-            return of(...merged)
+        tap((action) => {
+            console.log(action)
         }),
-        (prev => merge(
-            interval(60000).pipe(
-                map((count) => actions.fetchRealtime.request()),
-            ),
-            prev,
-        )),
+    )
+)
+
+export const scheduleRealtime: Epic<AllActions, AllActions> = (action$) => (
+    merge(
+        action$.pipe(
+            filter(isActionOf(actions.initRealtime)),
+            map(() => actions.fetchRealtime.request()),
+        ),
+        action$.pipe(
+            filter(isActionOf(actions.requestRealtimeAt)),
+            switchMap((action) => of(actions.fetchRealtime.request()).pipe(
+                delay(action.payload.at.toDate())
+            )),
+        ),
     )
 )
