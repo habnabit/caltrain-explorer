@@ -1,21 +1,20 @@
-import * as React from 'react'
-import * as ReactDOM from 'react-dom'
-import { Provider, connect } from 'react-redux'
-import { onlyUpdateForKeys, compose, withState, mapPropsStream } from 'recompose'
-import { createStore, DeepPartial, Reducer, Store, Dispatch, bindActionCreators, AnyAction, applyMiddleware, Middleware } from 'redux'
-import { createEpicMiddleware } from 'redux-observable'
-import { List, Record, Set, OrderedSet, Map, Seq } from 'immutable'
+import { List, Map, OrderedSet, Record, Seq, Set } from 'immutable'
 import * as moment from 'moment'
 import { isMoment } from 'moment'
-import * as transit from 'transit-immutable-js'
+import * as React from 'react'
+import * as ReactDOM from 'react-dom'
+import { connect, Provider } from 'react-redux'
+import { compose, mapPropsStream, onlyUpdateForKeys, withState } from 'recompose'
+import { AnyAction, applyMiddleware, bindActionCreators, createStore, DeepPartial, Dispatch, Middleware, Reducer, Store } from 'redux'
+import { createEpicMiddleware } from 'redux-observable'
 import { ActionType, getType } from 'typesafe-actions'
 
-import './site.sass'
+import { combineLatest, interval, merge, of } from 'rxjs';
+import { map } from 'rxjs/operators';
 import * as actions from './actions'
 import * as caltrain from './caltrain'
 import * as realtime from './realtime'
-import { interval, combineLatest, merge, of } from 'rxjs';
-import { map } from 'rxjs/operators';
+import './site.sass'
 
 
 (function() {
@@ -29,7 +28,16 @@ function momentsAndOrEqual<T>(a: T, b: T): boolean {
     return (isMoment(a) && isMoment(b) && a.isSame(b)) || a == b
 }
 
-let StopsElement = onlyUpdateForKeys(
+const enhanceWithNow = (intervalMs: number) => mapPropsStream((props$) => {
+    return combineLatest(
+        props$,
+        merge(of(0), interval(intervalMs)),
+    ).pipe(
+        map(([props, _interval]) => ({...props, now: moment()}))
+    )
+})
+
+const StopsElement = onlyUpdateForKeys(
     ['selection', 'zoneStops']
 )((props: {
     selection: Selection
@@ -47,7 +55,7 @@ let StopsElement = onlyUpdateForKeys(
 
 const ConnectedStopsElement = connect(
     (top: State) => {
-        let { selection, zoneStops } = top
+        const { selection, zoneStops } = top
         return { selection, zoneStops }
     },
     (d: Dispatch) => bindActionCreators({
@@ -62,10 +70,11 @@ const ConnectedStopsElement = connect(
 
 export type ShowDate = 'today' | 'tomorrow' | moment.Moment
 
-let DateElement = onlyUpdateForKeys(
+const DateElement = onlyUpdateForKeys(
     ['date']
 )((props: {
     date: ShowDate
+    dateMoment: moment.Moment
     onSetDate: typeof actions.setDate
 }) => {
     let active
@@ -75,20 +84,32 @@ let DateElement = onlyUpdateForKeys(
     case 'tomorrow': active = 'tomorrow'; break
     default:
         active = 'moment'
-        momentBox = <input className="input" type="date" value={props.date.format('YYYY-MM-DD')} onChange={ev => props.onSetDate({date: moment(ev.target.value)})} />
+        momentBox = <div className="box span-6 pa-no">
+            <input
+                className="input bo-no" type="date" value={props.date.format('YYYY-MM-DD')}
+                onChange={(ev) => props.onSetDate({date: moment(ev.target.value)})}
+                style={({
+                    height: 'calc(var(--text-m) * var(--line-height) + 2 * var(--space-s))',
+                })} />
+        </div>
     }
-    return <div className="flex gap-no read_l pa-v_s">
-        <a className={"box " + (active == 'today'? 'active' : '')} onClick={() => props.onSetDate({date: 'today'})}>Today</a>
-        <a className={"box " + (active == 'tomorrow'? 'active' : '')} onClick={() => props.onSetDate({date: 'tomorrow'})}>Tomorrow</a>
-        <a className={"box " + (active == 'moment'? 'active' : '')} onClick={() => props.onSetDate({date: moment()})}>Date…</a>
-        {momentBox}
+    return <div className="read_l pa-v_s">
+        <div className="flex gap-no">
+            <a className={"box " + (active == 'today'? 'active' : '')} onClick={() => props.onSetDate({date: 'today'})}>Today</a>
+            <a className={"box " + (active == 'tomorrow'? 'active' : '')} onClick={() => props.onSetDate({date: 'tomorrow'})}>Tomorrow</a>
+            <a className={"box " + (active == 'moment'? 'active' : '')} onClick={() => props.onSetDate({date: props.dateMoment})}>Date…</a>
+        </div>
+        <div className="grid gap-no">
+            <div className="box span-6">{props.dateMoment.format('ddd MMM Do')}</div>
+            {momentBox}
+        </div>
     </div>
 })
 
 const ConnectedDateElement = connect(
     (top: State) => {
-        let { date } = top
-        return { date }
+        const { date } = top
+        return { date, dateMoment: top.dateMoment() }
     },
     (d: Dispatch) => bindActionCreators({
         onSetDate: actions.setDate,
@@ -100,33 +121,34 @@ const ConnectedDateElement = connect(
     },
 )(DateElement)
 
-let TripElement = onlyUpdateForKeys(
-    ['selection', 'show', 'trip', 'stops', 'date', 'tripUpdates']
-)((props: {
+const TripElement = compose<{
     selection: Selection
     show: Set<caltrain.StopName>
     trip: caltrain.Trip
     stops: caltrain.AlignedStops
     date: moment.Moment
     tripUpdates: TripUpdates
+    now: moment.Moment
     onSelectReference: typeof actions.selectReferenceStop
-}) => {
-    let stops = props.stops.filter(([s, _ts]) => props.show.has(s.name))
+}, {}>(
+    onlyUpdateForKeys(['selection', 'show', 'trip', 'stops', 'date', 'tripUpdates']),
+    enhanceWithNow(60000),
+)((props) => {
+    const stops = props.stops.filter(([s, _ts]) => props.show.has(s.name))
     if (!stops.some(([_s, ts]) => ts != 'never' && ts != 'skipped')) {
         return <></>
     }
-    let firstDeparture = stops
+    const firstDeparture = stops
         .valueSeq()
         .flatMap(([s, ts]) => s.name == props.selection.referenceStop && ts instanceof caltrain.TripStop? [ts.departureFor(props.date)] : [])
         .first()
-    let now = moment()
     let currentStop: 'searching' | 'found' = 'searching'
     return <tr>
         <td>{props.trip.shortName}</td>
         {stops.map(([s, ts], e) => {
             let cell
             let realtimeDelay: number | undefined = undefined
-            let parts = ['']
+            const parts = ['']
             function addPart(value: number | undefined, neg: string, pos: string): void {
                 if (value === undefined) {
                 } else if (value > 0) {
@@ -148,17 +170,15 @@ let TripElement = onlyUpdateForKeys(
                 if (ts == 'skipped') {
                     cell = '–'
                 } else {
-                    let realtimeKey = new caltrain.TripStopKey({tripId: props.trip.id, stopId: s.id})
-                    let realtime = props.tripUpdates.get(realtimeKey)
+                    const realtimeKey = new caltrain.TripStopKey({tripId: props.trip.id, stopId: s.id})
+                    const realtime = props.tripUpdates.get(realtimeKey)
                     let stopDate: moment.Moment
-                    let scheduled = ts.departureFor(props.date)
+                    const scheduled = ts.departureFor(props.date)
                     if (realtime !== undefined) {
                         stopDate = realtime.departure
                         realtimeDelay = stopDate.diff(scheduled, 'minute')
                         if (realtimeDelay < -12 * 60) {
                             [stopDate, realtimeDelay] = [scheduled, undefined]
-                        } else if (realtimeDelay > 0 || realtimeDelay < 0) {
-                            console.log({realtimeDelay, realtime})
                         }
                     } else {
                         stopDate = scheduled
@@ -168,7 +188,7 @@ let TripElement = onlyUpdateForKeys(
                     addPart(
                         firstDeparture !== undefined? stopDate.diff(firstDeparture, 'minutes') : undefined,
                         '≺', '≻')
-                    let untilStop = stopDate.diff(now, 'minutes')
+                    const untilStop = stopDate.diff(props.now, 'minutes')
                     if (currentStop == 'searching' && untilStop > 0) {
                         if (untilStop < 3 * 60) {
                             cell = `➘${cell}`
@@ -184,10 +204,10 @@ let TripElement = onlyUpdateForKeys(
             }
             parts[0] = cell
 
-            let classes = ['text-center']
+            const classes = ['text-center']
             if (realtimeDelay !== undefined) {
                 classes.push('realtime')
-                let theme = realtimeDelay > 0? 'danger'  // late
+                const theme = realtimeDelay > 0? 'danger'  // late
                     : realtimeDelay < 0? 'warning'  // early
                     : 'success'  // on time
                 classes.push('tinted-bg-' + theme)
@@ -199,7 +219,7 @@ let TripElement = onlyUpdateForKeys(
     </tr>
 })
 
-let TripsElement = onlyUpdateForKeys(
+const TripsElement = onlyUpdateForKeys(
     ['direction', 'selection', 'trips', 'date', 'tripUpdates']
 )((props: {
     direction: caltrain.Direction
@@ -212,10 +232,10 @@ let TripsElement = onlyUpdateForKeys(
     if (props.trips.isEmpty()) {
         return <></>
     }
-    let aTrip = props.trips.first()
-    let service = new caltrain.ServiceStopKey(aTrip)
-    let allStops = caltrain.serviceStops.get(service)
-    let show = props.selection.stopsToShow(allStops)
+    const aTrip = props.trips.first()
+    const service = new caltrain.ServiceStopKey(aTrip)
+    const allStops = caltrain.serviceStops.get(service)
+    const show = props.selection.stopsToShow(allStops)
     return <table className="table bo-no fixed dense trip-table">
         <thead>
             <tr>
@@ -225,7 +245,7 @@ let TripsElement = onlyUpdateForKeys(
         </thead>
         <tbody>
             {props.trips.map((trip, e) => {
-                let stops = trip.stopsAlignedTo(allStops)
+                const stops = trip.stopsAlignedTo(allStops)
                 return <TripElement key={e} {...{show, trip, stops}} {...props} />
             })}
         </tbody>
@@ -234,7 +254,7 @@ let TripsElement = onlyUpdateForKeys(
 
 const ConnectedTripsElement = connect(
     (top: State) => {
-        let { tripUpdates } = top
+        const { tripUpdates } = top
         return { tripUpdates }
     },
     (d: Dispatch) => bindActionCreators({
@@ -242,29 +262,29 @@ const ConnectedTripsElement = connect(
     }, d),
 )(TripsElement)
 
-let ServicesElement = onlyUpdateForKeys(
+const ServicesElement = onlyUpdateForKeys(
     ['selection', 'date']
 )((props: {
     selection: Selection
     date: moment.Moment
 }) => {
-    let services = caltrain.servicesFor(props.date)
-    let stops = props.selection.checkedStops
-    let allServices = Set.intersect<caltrain.ServiceStopKey>(
+    const services = caltrain.servicesFor(props.date)
+    const stops = props.selection.checkedStops
+    const allServices = Set.intersect<caltrain.ServiceStopKey>(
         stops
-            .map(s => caltrain.serviceStopKeysByStopName.get(s)))
-        .filter(s => services.has(s.serviceId))
-    let trips = allServices
+            .map((s) => caltrain.serviceStopKeysByStopName.get(s)))
+        .filter((s) => services.has(s.serviceId))
+    const trips = allServices
         .valueSeq()
-        .flatMap(s => caltrain.tripsByService.get(s))
-        .groupBy(s => s.direction)
-        .map(collected => collected
+        .flatMap((s) => caltrain.tripsByService.get(s))
+        .groupBy((s) => s.direction)
+        .map((collected) => collected
             .valueSeq()
-            .map(t => [
+            .map((t) => [
                 t,
                 caltrain.tripStops.get(t.id)
-                    .filter(ts => stops.has(ts.stop.name))
-                    .map(ts => [ts, ts.departureFor(props.date)])
+                    .filter((ts) => stops.has(ts.stop.name))
+                    .map((ts) => [ts, ts.departureFor(props.date)]),
             ] as [caltrain.Trip, List<[caltrain.TripStop, moment.Moment]>])
             .filter(([_t, tsl]) => tsl.some(([_ts, departure]) => departure.isAfter(props.date)))
             .sortBy(([_t, tsl]) => tsl.first()[1])
@@ -279,7 +299,7 @@ let ServicesElement = onlyUpdateForKeys(
 
 const ConnectedServicesElement = connect(
     (top: State) => {
-        let { selection } = top
+        const { selection } = top
         return { selection, date: top.dateMoment() }
     },
     undefined,
@@ -292,15 +312,6 @@ const ConnectedServicesElement = connect(
 
 type FetchState = 'idle' | 'fetching' | moment.Moment
 
-const enhanceWithNow = mapPropsStream((props$) => {
-    return combineLatest(
-        props$,
-        merge(of(0), interval(5000)),
-    ).pipe(
-        map(([props, _interval]) => ({...props, now: moment()}))
-    )
-})
-
 const RealtimeFetchElement = compose<{
     fetchState: FetchState
     dataFrom: moment.Moment | undefined
@@ -308,7 +319,7 @@ const RealtimeFetchElement = compose<{
     onRefetch: typeof actions.fetchRealtime.request
 }, {}>(
     onlyUpdateForKeys(['fetchState', 'dataFrom']),
-    enhanceWithNow,
+    enhanceWithNow(5000),
 )((props) => {
     let staleness, dataStatus, tint
     if (props.dataFrom !== undefined) {
@@ -320,7 +331,7 @@ const RealtimeFetchElement = compose<{
         dataStatus = 'No realtime data'
         tint = 'danger'
     }
-    let nextFetch = props.fetchState == 'fetching'? 'fetching'
+    const nextFetch = props.fetchState == 'fetching'? 'fetching'
         : props.fetchState == 'idle'? ''
         : `fetch in ${props.fetchState.diff(props.now, 'seconds')}s`
     return <div className={`pos-sticky zi-4 box bg-0 tinted-${tint}`} style={({
@@ -339,7 +350,7 @@ const RealtimeFetchElement = compose<{
 
 const ConnectedRealtimeFetchElement = connect(
     (top: State) => {
-        let { fetchState, dataFrom } = top
+        const { fetchState, dataFrom } = top
         return { fetchState, dataFrom }
     },
     (d: Dispatch) => bindActionCreators({
@@ -357,7 +368,7 @@ export class Selection extends Record({
     referenceStop: undefined as caltrain.StopName | undefined,
 }) {
     toggleChecked(stop: caltrain.StopName): this {
-        return this.update('checkedStops', s => {
+        return this.update('checkedStops', (s) => {
             if (s.has(stop)) {
                 return s.remove(stop)
             } else {
@@ -367,9 +378,9 @@ export class Selection extends Record({
     }
 
     recheckingZoneStops(zoneStops: ZoneStops): Selection {
-        let visibleStops = zoneStops
+        const visibleStops = zoneStops
             .valueSeq()
-            .flatMap(l => l)
+            .flatMap((l) => l)
             .toSet()
         return new Selection({
             checkedStops: this.checkedStops.intersect(visibleStops),
@@ -378,7 +389,7 @@ export class Selection extends Record({
     }
 
     stopsToShow(allStops: List<caltrain.Stop>): OrderedSet<caltrain.StopName> {
-        let showIndices = allStops
+        const showIndices = allStops
             .toSeq()
             .flatMap((stop, e) => {
                 if (this.checkedStops.has(stop.name)) {
@@ -387,11 +398,11 @@ export class Selection extends Record({
                     return []
                 }
             })
-            .filter(i => i >= 0 && i < allStops.size)
+            .filter((i) => i >= 0 && i < allStops.size)
             .sort()
             .toOrderedSet()
             .toList()
-        let selectedIndices = allStops
+        const selectedIndices = allStops
             .toSeq()
             .flatMap((stop, e) => this.checkedStops.has(stop.name)? [e] : [])
             .toSet()
@@ -427,10 +438,10 @@ export class State extends Record({
     }
 
     withRealtimeUpdates(updatePayload: actions.UpdatePayload): this {
-        let alerts = [] as realtime.ServiceAlert[]
+        const alerts = [] as realtime.ServiceAlert[]
         let newUpdates: TripUpdates = Map()
-        newUpdates = newUpdates.withMutations(tripUpdates => {
-            for (let update of updatePayload.updates) {
+        newUpdates = newUpdates.withMutations((tripUpdates) => {
+            for (const update of updatePayload.updates) {
                 switch (update.kind) {
                 case 'tripUpdate': {
                     tripUpdates.set(update.tripStop, update)
@@ -452,22 +463,22 @@ export class State extends Record({
     }
 
     zoneStopsFor(date: moment.Moment = this.dateMoment()) {
-        let zoneStops = caltrain.servicesFor(date)
+        const zoneStops = caltrain.servicesFor(date)
             .valueSeq()
-            .flatMap(serviceId => {
-                let stops = caltrain.serviceStops.get(
+            .flatMap((serviceId) => {
+                const stops = caltrain.serviceStops.get(
                     new caltrain.ServiceStopKey({serviceId, direction: 'South'}))
                 if (stops === undefined) {
                     return []
                 }
                 return [
                     stops
-                        .groupBy(stop => stop.zone)
-                        .map(collected => collected
+                        .groupBy((stop) => stop.zone)
+                        .map((collected) => collected
                             .valueSeq()
-                            .map(stop => stop.name)
+                            .map((stop) => stop.name)
                             .toList())
-                        .toMap()
+                        .toMap(),
                 ]
             })
             .toSet()
@@ -478,17 +489,17 @@ export class State extends Record({
     }
 
     recheckingStops(updater: (state: State) => State, force = false): State {
-        let updated = updater(this)
+        const updated = updater(this)
         if (!force && this.date === updated.date) {
             return updated
         }
-        let zoneStops = updated.zoneStopsFor()
+        const zoneStops = updated.zoneStopsFor()
         if (!force && this.zoneStops.equals(zoneStops)) {
             return updated
         }
         return updated
             .set('zoneStops', zoneStops)
-            .update('selection', sel => sel.recheckingZoneStops(zoneStops))
+            .update('selection', (sel) => sel.recheckingZoneStops(zoneStops))
     }
 }
 
@@ -510,24 +521,24 @@ type AllActions = ActionType<typeof actions>
 
 function reducer(state = new State(), action: AllActions): State {
     if (state.zoneStops.size == 0) {
-        state = state.recheckingStops(s => s, true)
+        state = state.recheckingStops((s) => s, true)
     }
 
     switch (action.type) {
     case getType(actions.toggleStopSelection): {
-        let { stop } = action.payload
-        return state.update('selection', s => s.toggleChecked(stop))
+        const { stop } = action.payload
+        return state.update('selection', (s) => s.toggleChecked(stop))
     }
 
     case getType(actions.selectReferenceStop): {
-        let { stop } = action.payload
-        return state.update('selection', s =>
-            s.update('referenceStop', r => r == stop? undefined : stop))
+        const { stop } = action.payload
+        return state.update('selection', (s) =>
+            s.update('referenceStop', (r) => r == stop? undefined : stop))
     }
 
     case getType(actions.setDate): {
-        let { date } = action.payload
-        return state.recheckingStops(s => s.set('date', date))
+        const { date } = action.payload
+        return state.recheckingStops((s) => s.set('date', date))
     }
 
     case getType(actions.fetchRealtime.request): {
@@ -548,9 +559,9 @@ function reducer(state = new State(), action: AllActions): State {
     }
 }
 
-const persistState: Middleware = store => next => action => {
-    let result = next(action)
-    let persisted = recordTransit.toJSON(store.getState())
+const persistState: Middleware = (store) => (next) => (action) => {
+    const result = next(action)
+    const persisted = recordTransit.toJSON(store.getState())
     localStorage.setItem('state', persisted)
     return result
 }
@@ -588,6 +599,6 @@ class RootElement extends React.Component {
     }
 }
 
-let root = document.createElement('div')
+const root = document.createElement('div')
 document.body.appendChild(root)
 ReactDOM.render(<RootElement />, root)

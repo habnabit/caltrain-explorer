@@ -1,16 +1,16 @@
 import * as gtfsRealtime from 'gtfs-rt-bindings'
-import { Seq, Record, List } from 'immutable'
+import { List, Record, Seq } from 'immutable'
 import * as moment from 'moment'
 import Pbf = require('pbf')
 import * as qs from 'qs'
 import { Epic } from 'redux-observable'
-import { from, of, merge, interval, Observable, forkJoin, ObservableInput, timer } from 'rxjs'
-import { filter, switchMap, map, catchError, tap, mergeMap, delay } from 'rxjs/operators'
-import { ActionType, isActionOf, getType } from 'typesafe-actions'
+import { forkJoin, from, interval, merge, Observable, ObservableInput, of, timer } from 'rxjs'
+import { catchError, delay, filter, map, mergeMap, switchMap, tap } from 'rxjs/operators'
+import { ActionType, getType, isActionOf } from 'typesafe-actions'
 
 import * as actions from './actions'
 import * as caltrain from './caltrain'
-import { Type as Result, isOk } from './result'
+import { isOk, Type as Result } from './result'
 
 
 type AllActions = ActionType<typeof actions>
@@ -46,11 +46,11 @@ export class TripUpdate extends Record({
     departure: undefined as moment.Moment,
 }) {
     static fromPbf(update: any): Seq.Indexed<RealtimeUpdate> {
-        let tripId = caltrain.isoTripId.wrap(update.trip.trip_id)
+        const tripId = caltrain.isoTripId.wrap(update.trip.trip_id)
         return Seq.Indexed(update.stop_time_update as any[]).map((stopUpdate) => {
-            let stopId = caltrain.isoStopId.wrap(stopUpdate.stop_id)
-            let departure = moment(stopUpdate.departure.time * 1000).local()
-            let tripStop = new caltrain.TripStopKey({tripId, stopId})
+            const stopId = caltrain.isoStopId.wrap(stopUpdate.stop_id)
+            const departure = moment(stopUpdate.departure.time * 1000).local()
+            const tripStop = new caltrain.TripStopKey({tripId, stopId})
             return new TripUpdate({tripStop, departure, _raw: {inner: stopUpdate, outer: update}})
         })
     }
@@ -69,10 +69,10 @@ export class ServiceAlert extends Record({
     stopIds: List<caltrain.StopId>(),
 }) {
     static fromPbf(alert: any): Seq.Indexed<RealtimeUpdate> {
-        let routeIds = [] as caltrain.RouteId[]
-        let stopIds = [] as caltrain.StopId[]
-        let matchingEntities = Seq.Indexed(alert.informed_entity as {agency_id: string, route_id: string, stop_id: string}[])
-            .filter(e => {
+        const routeIds = [] as caltrain.RouteId[]
+        const stopIds = [] as caltrain.StopId[]
+        const matchingEntities = Seq.Indexed(alert.informed_entity as {agency_id: string, route_id: string, stop_id: string}[])
+            .filter((e) => {
                 if (e.agency_id != AGENCY) {
                     return false
                 }
@@ -88,11 +88,11 @@ export class ServiceAlert extends Record({
         if (matchingEntities == 0) {
             return Seq.Indexed()
         }
-        let now = moment()
-        let active = Seq.Indexed(alert.active_period as {start: number, end: number}[])
+        const now = moment()
+        const active = Seq.Indexed(alert.active_period as {start: number, end: number}[])
             .flatMap(({start, end}) => {
-                let activeSince = moment(start * 1000).local()
-                let activeUntil = moment(end * 1000).local()
+                const activeSince = moment(start * 1000).local()
+                const activeUntil = moment(end * 1000).local()
                 if (now.isBetween(activeSince, activeUntil)) {
                     return [{activeSince, activeUntil}]
                 } else {
@@ -112,7 +112,7 @@ export class ServiceAlert extends Record({
                 routeIds: List(routeIds),
                 stopIds: List(stopIds),
                 _raw: {inner: alert},
-            }, active))
+            }, active)),
         ])
     }
 }
@@ -136,10 +136,10 @@ const fetchAndParse: (url: string) => Observable<FetchedAndParsed> = (url: strin
     switchMap((url: string) => fetch(url)),
     switchMap((r: Response) => r.arrayBuffer()),
     map((buf): FetchedAndParsed => {
-        let p = new Pbf(new Uint8Array(buf))
-        let feed = gtfsRealtime.FeedMessage.read(p)
-        let updates = List<RealtimeUpdate>().withMutations(ret => {
-            for (let entity of feed.entity) {
+        const p = new Pbf(new Uint8Array(buf))
+        const feed = gtfsRealtime.FeedMessage.read(p)
+        const updates = List<RealtimeUpdate>().withMutations((ret) => {
+            for (const entity of feed.entity) {
                 if (entity.trip_update !== null) {
                     ret.concat(TripUpdate.fromPbf(entity.trip_update))
                 } else if (entity.alert !== null) {
@@ -149,7 +149,7 @@ const fetchAndParse: (url: string) => Observable<FetchedAndParsed> = (url: strin
                 }
             }
         })
-        let timestamp = moment(feed.header.timestamp * 1000)
+        const timestamp = moment(feed.header.timestamp * 1000)
         return { updates, timestamp }
     }),
     catchError<FetchedAndParsed, FetchedAndParsed>((error) => of(error)),
@@ -158,7 +158,7 @@ const fetchAndParse: (url: string) => Observable<FetchedAndParsed> = (url: strin
 export const fetchRealtime: Epic<AllActions, AllActions> = (action$) => (
     action$.pipe(
         filter(isActionOf(actions.fetchRealtime.request)),
-        switchMap(action => {
+        switchMap((action) => {
             return of([
                 'https://api.511.org/transit/tripupdates?' + API_QS,
                 'https://api.511.org/transit/servicealerts?' + API_QS,
@@ -168,10 +168,10 @@ export const fetchRealtime: Epic<AllActions, AllActions> = (action$) => (
             )
         }),
         mergeMap((results: FetchedAndParsed[]) => {
-            let ret: AllActions[] = []
+            const ret: AllActions[] = []
             let latestTimestamp: moment.Moment | undefined = undefined
-            let updates = List<RealtimeUpdate>().withMutations(u => {
-                for (let r of results) {
+            const updates = List<RealtimeUpdate>().withMutations((u) => {
+                for (const r of results) {
                     if (isOk(r)) {
                         u.concat(r.updates)
                         if (latestTimestamp === undefined || r.timestamp.isAfter(latestTimestamp)) {
@@ -182,14 +182,11 @@ export const fetchRealtime: Epic<AllActions, AllActions> = (action$) => (
                     }
                 }
             })
-            let dataFrom = latestTimestamp !== undefined? latestTimestamp : moment()
-            let nextFetchAt = dataFrom.clone().add(1, 'minute')
+            const dataFrom = latestTimestamp !== undefined? latestTimestamp : moment()
+            const nextFetchAt = dataFrom.clone().add(1, 'minute')
             ret.push(actions.fetchRealtime.success({updates, dataFrom}))
             ret.push(actions.requestRealtimeAt({at: nextFetchAt}))
             return ret
-        }),
-        tap((action) => {
-            console.log(action)
         }),
     )
 )

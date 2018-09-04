@@ -1,6 +1,6 @@
 import { List, Map, Record, Seq, Set } from 'immutable'
-import { iso, Newtype } from 'newtype-ts'
 import * as moment from 'moment'
+import { iso, Newtype } from 'newtype-ts'
 import * as transit from 'transit-immutable-js'
 const toposort: <T>(edges: [T, T][]) => T[] = require('toposort')
 
@@ -129,12 +129,11 @@ interface RawData {
 
 const rawData: RawData = require('./ct-gtfs.json')
 export const caltrain = Seq(rawData)
-    .map(vl => {
-        let vseq = Seq(vl)
-        let keys = Seq(vseq.first())
-        new Object()
+    .map((vl) => {
+        const vseq = Seq(vl)
+        const keys = Seq(vseq.first())
         return vseq.slice(1)
-            .map(cells => Seq.Keyed(keys.zip(Seq(cells))).toObject())
+            .map((cells) => Seq.Keyed(keys.zip(Seq(cells))).toObject())
             .toArray()
     })
     .toObject() as CaltrainData
@@ -151,7 +150,7 @@ export class FareZone extends Record({
 export const fareZones: Map<ZoneId, FareZone> = Seq(caltrain.farezone_attributes)
     .toKeyedSeq()
     .mapEntries(([_e, {zone_id, zone_name}]) => {
-        let id = isoZoneId.wrap(zone_id)
+        const id = isoZoneId.wrap(zone_id)
         return [id, new FareZone({id, name: zone_name})] as [ZoneId, FareZone]
     })
     .toMap()
@@ -174,8 +173,8 @@ export class Stop extends Record({
 export const stops: Map<StopId, Stop> = Seq(caltrain.stops)
     .toKeyedSeq()
     .mapEntries(([_e, stop]) => {
-        let id = isoStopId.wrap(stop.stop_id)
-        let zone = fareZones.get(isoZoneId.wrap(stop.zone_id))
+        const id = isoStopId.wrap(stop.stop_id)
+        const zone = fareZones.get(isoZoneId.wrap(stop.zone_id))
         return [id, new Stop({
             id, zone,
             code: stop.stop_code,
@@ -201,7 +200,7 @@ export class Route extends Record({
 export const routes: Map<RouteId, Route> = Seq(caltrain.routes)
     .toKeyedSeq()
     .mapEntries(([_e, route]) => {
-        let id = isoRouteId.wrap(route.route_id)
+        const id = isoRouteId.wrap(route.route_id)
         return [id, new Route({
             id,
             desc: route.route_desc,
@@ -245,17 +244,17 @@ export class Trip extends Record({
     shortName: '',
 }) {
     stopsAlignedTo(stops: List<Stop>): AlignedStops {
-        let byIdEntries = tripStops.get(this.id)
+        const byIdEntries = tripStops.get(this.id)
             .valueSeq()
-            .map(ts => [ts.stop.id, ts] as [StopId, TripStop])
+            .map((ts) => [ts.stop.id, ts] as [StopId, TripStop])
             .toList()
-        let byId = Map(byIdEntries)
-        let firstStop = byIdEntries.first()[0]
-        let lastStop = byIdEntries.last()[0]
+        const byId = Map(byIdEntries)
+        const firstStop = byIdEntries.first()[0]
+        const lastStop = byIdEntries.last()[0]
         let seenFirst = false, seenLast = false
-        return List<[Stop, AlignedStop]>().withMutations(ret => {
-            stops.forEach(s => {
-                let stop = byId.get(s.id)
+        return List<[Stop, AlignedStop]>().withMutations((ret) => {
+            stops.forEach((s) => {
+                const stop = byId.get(s.id)
                 if (!seenFirst && stop && s.id == firstStop) {
                     seenFirst = true
                 } else if (!seenLast && stop && s.id == lastStop) {
@@ -276,9 +275,9 @@ export class Trip extends Record({
 export const trips: Map<TripId, Trip> = Seq(caltrain.trips)
     .toKeyedSeq()
     .mapEntries(([_e, trip]) => {
-        let id = isoTripId.wrap(trip.trip_id)
-        let route = routes.get(isoRouteId.wrap(trip.route_id))
-        let directionKey = new DirectionKey({
+        const id = isoTripId.wrap(trip.trip_id)
+        const route = routes.get(isoRouteId.wrap(trip.route_id))
+        const directionKey = new DirectionKey({
             routeId: route.id,
             directionId: trip.direction_id,
         })
@@ -293,7 +292,8 @@ export const trips: Map<TripId, Trip> = Seq(caltrain.trips)
     .toMap()
 
 function momentWithTime(m: moment.Moment, time: string): moment.Moment {
-    let [hour, minute, second] = time.split(':').map(v => parseInt(v))
+    // tslint:disable-next-line:prefer-const
+    let [hour, minute, second] = time.split(':').map((v) => parseInt(v))
     if (hour > 23) {
         m = m.clone().add(hour / 24, 'days')
         hour = hour % 24
@@ -318,7 +318,7 @@ export class TripStop extends Record({
 }
 
 export const tripStops: Map<TripId, List<TripStop>> = Seq(caltrain.stop_times)
-    .map(s => {
+    .map((s) => {
         return new TripStop({
             trip: trips.get(isoTripId.wrap(s.trip_id)),
             stop: stops.get(isoStopId.wrap(s.stop_id)),
@@ -327,10 +327,10 @@ export const tripStops: Map<TripId, List<TripStop>> = Seq(caltrain.stop_times)
             sequence: parseInt(s.stop_sequence),
         })
     })
-    .groupBy(s => s.trip.id)
-    .map(stops => stops
+    .groupBy((s) => s.trip.id)
+    .map((stops) => stops
         .valueSeq()
-        .sortBy(s => s.sequence)
+        .sortBy((s) => s.sequence)
         .toList())
     .toMap()
 
@@ -341,61 +341,61 @@ export class ServiceStopKey extends Record({
 export const serviceStops: Map<ServiceStopKey, List<Stop>> = tripStops
     .entrySeq()
     .map(([tripId, stops]) => {
-        let trip = trips.get(tripId)
-        let deps: [StopId, StopId][] = []
+        const trip = trips.get(tripId)
+        const deps: [StopId, StopId][] = []
         stops.forEach((stop1, e) => {
             if (e == 0) {
                 return
             }
-            let stop2 = stops.get(e - 1)
+            const stop2 = stops.get(e - 1)
             deps.push([stop1.stop.id, stop2.stop.id])
         })
         return [new ServiceStopKey(trip), deps] as [ServiceStopKey, [StopId, StopId][]]
     })
     .groupBy(([key, _stops]) => key)
-    .map(collected => {
-        let allDeps = collected.valueSeq()
+    .map((collected) => {
+        const allDeps = collected.valueSeq()
             .flatMap(([_key, stops]) => stops)
             .filter(([s1, s2]) => isoStopId.unwrap(s1).length == 5 && isoStopId.unwrap(s2).length == 5)
             .toArray()
-        let sorted = Seq(toposort(allDeps))
+        const sorted = Seq(toposort(allDeps))
         return sorted
             .reverse()
-            .map(stopId => stops.get(stopId))
+            .map((stopId) => stops.get(stopId))
             .toList()
     })
     .toMap()
 
 export const tripsByService: Map<ServiceStopKey, List<Trip>> = trips
     .valueSeq()
-    .groupBy(t => new ServiceStopKey(t))
-    .map(collected => collected.valueSeq().toList())
+    .groupBy((t) => new ServiceStopKey(t))
+    .map((collected) => collected.valueSeq().toList())
     .toMap()
 
 export const serviceStopKeysByStopName: Map<StopName, Set<ServiceStopKey>> = serviceStops
     .entrySeq()
-    .flatMap(([key, stops]) => stops.map(stop => [stop.name, key] as [StopName, ServiceStopKey]))
+    .flatMap(([key, stops]) => stops.map((stop) => [stop.name, key] as [StopName, ServiceStopKey]))
     .groupBy(([name, _key]) => name)
-    .map(collected => collected.valueSeq().map(([_name, key]) => key).toSet())
+    .map((collected) => collected.valueSeq().map(([_name, key]) => key).toSet())
     .toMap()
 
 const calendarKey: ('monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday')[] = [
     'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 
 export function servicesFor(when: moment.Moment = moment()): Set<ServiceId> {
-    let whenString = when.format('YYYYMMDD')
-    let services = Seq(caltrain.calendar)
-        .filter(d => {
+    const whenString = when.format('YYYYMMDD')
+    const services = Seq(caltrain.calendar)
+        .filter((d) => {
             return (
                 whenString >= d.start_date
                 && whenString < d.end_date
                 && d[calendarKey[when.day()]] == '1'
             )
         })
-        .map(d => isoServiceId.wrap(d.service_id))
+        .map((d) => isoServiceId.wrap(d.service_id))
         .toSet()
     return Seq(caltrain.calendar_dates)
-        .filter(d => d.date == whenString)
+        .filter((d) => d.date == whenString)
         .reduce((serviceSet, ex) => {
             switch (ex.exception_type) {
             case '1': return serviceSet.add(isoServiceId.wrap(ex.service_id))
