@@ -1,0 +1,46 @@
+{
+  "icons": [
+    {
+      "src": "icon_512x512.818b219d648aad6f21fa8aa599a7c686.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon_512x512.818b219d648aad6f21fa8aa599a7c686.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon_384x384.f5f1e6f696eb17902bbd8d1b8e9a4d9d.png",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "icon_256x256.9ca4348a1b8890473efad500efc57c16.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "icon_192x192.a6b668e6c8f7abda64016c71a46689bc.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon_128x128.e1e11dc509cd85ad6dc66db63e07bb65.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "icon_96x96.323d4c9a8a4fb44e28ddc9b0f0100b67.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    }
+  ],
+  "name": "🚂 It's Caltrain ✨",
+  "short_name": "Caltrain",
+  "orientation": "portrait",
+  "display": "standalone",
+  "start_url": ".",
+  "description": "The Caltrain you always wanted",
+  "background_color": "#ffffff"
+}
